@@ -102,6 +102,7 @@ class SubscriptionManager:
 class PublishManager:
     """PublishManager"""
     def __init__(self, node, topic_type:str, topic_name:str, queue_length: int =10, israw : bool = False):
+        mlogger.debug("create PublishManager")
         self.node = node
         self.topic_type :str = topic_type
         self.topic_name :str = topic_name
@@ -114,6 +115,7 @@ class PublishManager:
             self.type_cls = TypeLoader(topic_type)
 
         self.handle = self.node.create_publisher(self.type_cls, topic_name, qos_profile =qos_profile_system_default )
+        mlogger.debug("node create_publisher completed")
         self.bridges = {}
 
     def add_publish(self, bridge_id):
@@ -175,7 +177,8 @@ class NodeManager(Thread):
         mlogger.debug("ros node manager started")
         try:
             while rclpy.ok():
-                rclpy.spin_once(the_node, timeout_sec=0)
+#                rclpy.spin_once(the_node)
+                rclpy.spin_once(the_node, timeout_sec=0.001)
         except Exception:
             mlogger.error(traceback.format_exc())
         finally:            
