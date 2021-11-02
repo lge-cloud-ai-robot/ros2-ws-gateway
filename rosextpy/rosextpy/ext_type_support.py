@@ -115,6 +115,8 @@ def ros_from_json(data, cls):
                 setattr(instance, name, b64_data)
             elif hasattr(field_type, 'get_fields_and_field_types') and isinstance(value, (dict, tuple, list, set, frozenset)):
                 setattr(instance, name, ros_from_json(value, field_type.__class__))
+            elif isinstance(field_type, float):
+                setattr(instance, name, float(value))
             else:
                 setattr(instance, name, value)
         return instance
