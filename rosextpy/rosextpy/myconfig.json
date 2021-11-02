@@ -1,0 +1,29 @@
+[
+   {
+      "title":"a1",
+      "active": true,
+      "address": "ws://localhost:5020",
+      "publish": [
+         {"name":"/testa_topic", "messageType":"std_msgs/msg/String"},
+         {"name":"/testa_topic_a", "messageType":"std_msgs/msg/String"}
+      ],
+      "subscribe": [
+         {"name":"/my_atopic", "messageType":"std_msgs/msg/String"},
+         {"name":"/my_atopic_a", "messageType":"std_msgs/msg/String"}
+      ]
+   },
+   {
+      "title":"a1",
+      "active": true,
+      "address": "ws://localhost:5060",
+      "publish": [
+         {"name":"/testb_topic", "messageType":"std_msgs/msg/String"},
+         {"name":"/testb_topic_a", "messageType":"std_msgs/msg/String"}
+      ],
+      "subscribe": [
+         {"name":"/my_btopic", "messageType":"std_msgs/msg/String"},
+         {"name":"/my_btopic_a", "messageType":"std_msgs/msg/String"}
+      ]
+   }
+
+]
