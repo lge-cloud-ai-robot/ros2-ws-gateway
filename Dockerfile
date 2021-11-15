@@ -1,10 +1,7 @@
-# ROS2 VNC Environment 
-
-# based on ros:galactic
+# ROS2 Gateway Docker
 #
-# sby@etri.re.kr
 #
-# now(21.10.08) rclpy of foxy support raw_mode
+#
 
 FROM ros:foxy-ros-base as ros2_base
 ENV DEBIAN_FRONTEND=noninteractive
