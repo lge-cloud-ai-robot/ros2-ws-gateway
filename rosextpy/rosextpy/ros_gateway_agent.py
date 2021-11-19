@@ -463,7 +463,7 @@ class RosWsGatewayAgent():
         """ get topic list being published in the network
         """
         mlogger.debug("api_get_topic_list")
-        topic_list = self.node_manager.get_node().get_topic_names_and_types()
+        topic_list = self.node_manager.get_topic_list()
         return topic_list        
 
     async def close(self):

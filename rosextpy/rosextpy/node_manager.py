@@ -198,6 +198,10 @@ class NodeManager(Thread):
         """get_node"""
         return self.node
 
+    def get_topic_list(self):
+        """get topic list"""
+        return self.node.get_topic_names_and_types()
+
     def remove_with_gateway(self, bridge_id):
         """remove_bridges"""
         self.destroy_subscription_by_bridge_id(bridge_id)

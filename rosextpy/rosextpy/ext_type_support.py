@@ -74,6 +74,7 @@ def SerializedTypeLoader(clsname):
     return temp
 
 from builtin_interfaces.msg._time import Time as ROSTime
+from std_msgs.msg._header import Header as ROSHeader
 
 # for sequnce<uint8>
 # in ROS2 , type of sequnce is 'array.array'
@@ -98,7 +99,15 @@ def ros_from_json(data, cls):
         for name, value in data.items():            
             field_type = getattr(instance,name)
 
-            if isinstance(field_type, ROSTime):
+            if isinstance(field_type, ROSHeader):
+                seq = value.get('seq')
+                if seq: # ROS1 module
+                    nvalue = value
+                    del nvalue['seq']
+                    setattr(instance, name, ros_from_json(nvalue, field_type.__class__))
+                else:                    
+                    setattr(instance, name, ros_from_json(value, field_type.__class__))
+            elif isinstance(field_type, ROSTime):
                 secs = value.get('sec')
                 if secs:
                     nsecs = value.get('nanosec')
