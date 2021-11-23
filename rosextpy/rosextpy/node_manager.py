@@ -78,7 +78,7 @@ class SubscriptionManager:
             #change bytes to json serializable
 
 
-        for callback in self.callbacks.values():
+        for callback in list(self.callbacks.values()):
             callback(self.topic_name, message)        
 
     def add_subscription(self, bridge_id, callback):
@@ -293,11 +293,11 @@ class NodeManager(Thread):
         """destroy_publisher_by_bridge_id"""
         mlogger.debug("destroy_publisher_by_bridge_id")   
         try:
-            for sub in self.publisher.values():
+            for sub in list(self.publisher.values()):
                 sub.remove_publish(bridge_id)
 
             tempv = {}
-            for k,v in self.publisher.items():
+            for k,v in list(self.publisher.items()):
                 if v.destroy_when_empty():
                     tempv[k] = v
             self.publisher = tempv
@@ -308,11 +308,11 @@ class NodeManager(Thread):
         """destroy_subscription_by_bridge_id"""
         mlogger.debug("destroy_subscription_by_bridge_id")
         try:
-            for sub in self.subscriptions.values():
+            for sub in list(self.subscriptions.values()):
                 sub.remove_subscription(bridge_id)
 
             tempv = {}
-            for k,v in self.subscriptions.items():
+            for k,v in list(self.subscriptions.items()):
                 if v.destroy_when_empty():
                     tempv[k] = v
             self.subscriptions = tempv

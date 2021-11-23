@@ -91,12 +91,12 @@ def ros_from_json(data, cls):
             key_type = cls.__args__[0]
             val_type = cls.__args__[1]
             instance: dict = dict()
-            for key, value in data.items():
+            for key, value in list(data.items()):
                 instance.update(ros_from_json(key, key_type), ros_from_json(value, val_type))
             return instance
     else:
         instance : cls = cls()
-        for name, value in data.items():            
+        for name, value in list(data.items()):
             field_type = getattr(instance,name)
 
             if isinstance(field_type, ROSHeader):
