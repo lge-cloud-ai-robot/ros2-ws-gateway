@@ -157,8 +157,7 @@ class RosWsGatewayAgent():
     async def _stop_client_tasks(self):
         mlogger.debug("_stop_client_tasks")
         try:
-            for t_task in list(self.gw_tasks.values())
-            :
+            for t_task in list(self.gw_tasks.values()):
                 t_task.cancel()
         except :
             mlogger.debug(traceback.format_exc())
