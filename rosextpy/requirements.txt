@@ -1,7 +1,0 @@
-tenacity
-websockets<9.0
-sanic
-pybind11
-cbor
-fastapi
-uvicorn
