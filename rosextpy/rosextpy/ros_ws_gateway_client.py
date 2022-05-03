@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 # rosextpy.ros_ws_gateway_client (ros2-ws-gateway)
-# Author: paraby@gmail.com
+# Author: parasby@gmail.com
 """ros_ws_gateway_client
 """
 
@@ -37,7 +37,7 @@ import websockets
 import websockets.exceptions
 from websockets.exceptions import InvalidStatusCode, WebSocketException, ConnectionClosedError, ConnectionClosedOK 
 #from node_manager import NodeManager
-from .ros_ws_gateway import RosWsGateway
+from rosextpy.ros_ws_gateway import RosWsGateway
 
 mlogger = logging.getLogger('ros_ws_gateway_client')
 

@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 # rosextpy.websocket_utils (ros2-ws-gateway)
-# Author: paraby@gmail.com
+# Author: parasby@gmail.com
 
 """config modile
 """

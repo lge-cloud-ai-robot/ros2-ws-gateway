@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 # rosextpy.ext_type_support (ros2-ws-gateway)
-# Author: paraby@gmail.com
+# Author: parasby@gmail.com
 
 
 ##  run the following instructions before using this module
@@ -44,8 +44,8 @@ import traceback
 
 mlogger = logging.getLogger('ext_type_support')
 
-from . import _rosextpy_pybind11
-class GenericTypeSuperMeta(type):
+from rosextpy import _rosextpy_pybind11
+class GenericTypeSuperMeta(type): 
     _FUNC1 = None
     _FUNC2 = None    
     @classmethod
@@ -79,15 +79,14 @@ from std_msgs.msg._header import Header as ROSHeader
 # for sequnce<uint8>
 # in ROS2 , type of sequnce is 'array.array'
 
-
 def ros_from_json(data, cls):
     if issubclass(cls, List):
         list_type = cls.__args__[0]
         instance: list = list()
         for value in data:
-            instance.append(ros_from_json(value, list_type))
+            instance.append(ros_from_json(value, list_type))        
         return instance
-    elif issubclass(cls, Dict):
+    elif issubclass(cls, Dict):            
             key_type = cls.__args__[0]
             val_type = cls.__args__[1]
             instance: dict = dict()
@@ -116,9 +115,12 @@ def ros_from_json(data, cls):
                     nsecs = value.get('nsecs')
                 data_time = ROSTime(sec=secs, nanosec = nsecs)
                 setattr(instance, name, data_time)
-            elif isinstance(field_type, array.array):
-                b64_data = pybase64.b64decode(value)
-                field_type.frombytes(b64_data)
+            elif isinstance(field_type, array.array):  
+                if field_type.typecode in 'bBu':  # Only char types will be encoded by b64
+                    b64_data = pybase64.b64decode(value)
+                    field_type.frombytes(b64_data)
+                else: #make loop                    
+                    setattr(instance, name, value)
             elif isinstance(field_type, bytes):
                 b64_data = pybase64.b64decode(value)
                 setattr(instance, name, b64_data)
@@ -143,10 +145,12 @@ class RosJsonEncodder(JSONEncoder):
                 for name in members.keys():                
                     results[name] = getattr(obj, name)
                 return results
-            elif isinstance(obj, array.array):   
-                b64data = str(pybase64.b64encode(obj.tobytes()), 'utf-8')
-                # add obj.tolist to base64 encoded list
-                return b64data
+            elif isinstance(obj, array.array):
+                if obj.typecode in 'bBu':
+                    b64data = str(pybase64.b64encode(obj.tobytes()), 'utf-8')                
+                    return b64data
+                else:                    
+                    return obj.tolist()                    
             elif isinstance(obj, bytes):   
                 b64data = str(pybase64.b64encode(obj), 'utf-8')
                 # add obj.tolist to base64 encoded list
@@ -157,7 +161,10 @@ class RosJsonEncodder(JSONEncoder):
             raise TypeModuleError(err)
 
 def ros_to_json(obj):
-    return json.dumps(obj,cls=RosJsonEncodder)        
+    return json.dumps(obj,cls=RosJsonEncodder)     
+
+def is_ros_obj(obj):
+    return hasattr(obj,'get_fields_and_field_types')   
 
 class TypeModuleError(Exception):
     def __init__(self, errorstr):
@@ -174,5 +181,98 @@ def TypeLoader(clsname):
         mod = importlib.import_module(mname)
         clmod = getattr(mod, cname)
         return clmod
+    except ValueError:
+        (mname, cname) = clsname.rsplit('.',1)            
+        if mname.find('.msg')== -1:
+            mname = ''.join([mname, '.msg'])
+        mod = importlib.import_module(mname)
+        clmod = getattr(mod, cname)
+        return clmod
+
     except Exception:
         raise TypeModuleError(clsname)
+
+def SrvTypeLoader(clsname):
+    try:
+        (mname, cname) = clsname.rsplit('/',1)  # sensor_msgs/srv/SetCameraInfo
+        mname = mname.replace('/','.')        
+        if mname.find('.srv')== -1:
+            mname = ''.join([mname, '.srv'])
+        mod = importlib.import_module(mname)
+        clmod = getattr(mod, cname)
+        return clmod
+    except ValueError:
+        (mname, cname) = clsname.rsplit('.',1) # sensor_msgs.srv.SetCameraInfo
+        if mname.find('.srv')== -1:
+            mname = ''.join([mname, '.srv'])
+        mod = importlib.import_module(mname)
+        clmod = getattr(mod, cname)
+        return clmod
+    except Exception:
+        raise TypeModuleError(clsname)
+
+def ActionTypeLoader(clsname):
+    try:
+        (mname, cname) = clsname.rsplit('/',1)  # ex: action_tutorials_interfaces/action/Fibonacci
+        mname = mname.replace('/','.')        
+        if mname.find('.action')== -1:
+            mname = ''.join([mname, '.action'])
+        mod = importlib.import_module(mname)
+        clmod = getattr(mod, cname)
+        return clmod
+    except ValueError:
+        (mname, cname) = clsname.rsplit('.',1) #  ex: action_tutorials_interfaces.action.Fibonacci
+        if mname.find('.action')== -1:
+            mname = ''.join([mname, '.action'])
+        mod = importlib.import_module(mname)
+        clmod = getattr(mod, cname)
+        return clmod
+    except Exception:
+        raise TypeModuleError(clsname) 
+
+
+#usage: 
+#   get_ros_value(rosObj, 'aaa.bbb.ccc')
+def get_ros_value(obj, attrname): 
+    try:
+        names= attrname.split('/',1)
+        if len(names) == 1:
+            return getattr(obj,names[0])
+        else:
+            return get_ros_value(getattr(obj,names[0]), names[1])
+    except AttributeError:
+        return None
+
+def set_ros_value(obj, targetpath, value):
+    names= targetpath.split('/',1)
+    if len(names) == 1: # final path
+        setattr(obj, names[0], value)        
+    else:
+        obj_m = getattr(obj,names[0])        
+        setattr(obj, names[0], set_ros_value(obj_m, names[1], value))
+    return obj
+
+
+def get_json_value(obj, attrname): 
+    try:
+        if isinstance(obj, str):
+            obj = json.loads(obj) 
+        names= attrname.split('/',1)
+        if len(names) == 1:
+            return obj.get(names[0],None)
+        else:
+            return get_json_value(obj[names[0]], names[1])
+    except AttributeError:
+        return None
+        
+
+def set_json_value(obj, targetpath, value):
+    names= targetpath.split('/',1)
+    if len(names) == 1: # final path
+        obj[names[0]] = value
+        return obj
+    else:
+        obj_m = obj.get(names[0],{})        
+        obj[names[0]] = set_json_value(obj_m, names[1], value)
+        return obj   
+

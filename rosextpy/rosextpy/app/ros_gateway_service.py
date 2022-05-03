@@ -21,20 +21,23 @@
 # SOFTWARE.
 
 # rosextpy.ros_gateway_agent (ros-ws-gateway)
-# Author: paraby@gmail.com
+# Author: parasby@gmail.com
 """ros_gateway_agent
 """
 import sys
+import os
 import logging
 import asyncio
-from typing import List, Dict
+from typing import List, Dict, Any
 ## must import configuration module before any other sub modules
 from ..mod_config import WS_CONFIG 
-#from rosextpy.ros_gateway_agent import RosWsGatewayAgent
-logging.basicConfig(stream=sys.stdout, format='%(levelname)-6s [%(filename)s:%(lineno)d] %(message)s', level=logging.INFO)
-mlogger = logging.getLogger('ros_agent_main')
-#mlogger.setLevel(logging.DEBUG)
 from rosextpy.ros_gateway_agent import RosWsGatewayAgent
+
+#logging.basicConfig(stream=sys.stdout, format='%(levelname)-6s [%(filename)s:%(lineno)d] %(message)s', level=logging.INFO)
+logging.basicConfig(stream=sys.stdout, format='%(levelname)-6s [%(filename)s:%(lineno)d] %(message)s', level=logging.DEBUG)
+mlogger = logging.getLogger('ros_agent_main')
+mlogger.setLevel(logging.DEBUG)
+logging.getLogger('ros_rpc_gateway_client').setLevel(logging.DEBUG)
 #logging.getLogger('ros_gateway_agent').setLevel(logging.DEBUG)
 #logging.getLogger('ros_ws_gateway').setLevel(logging.DEBUG)
 #logging.getLogger('ros_ws_gateway_client').setLevel(logging.DEBUG)
@@ -69,8 +72,31 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
         publish: List[Dict[str,str]]=None
         subscribe: List[Dict[str,str]]=None
 
+
+    # class ROSRESTRuleDetail(BaseModel):
+    #     content_type: str
+    #     topics: Dict[str,str]
+    #     mapping: List[Dict[str,str]]
+
+    # class ROSRESTRule(BaseModel):
+    #     service_name: str
+    #     service_uri: str
+    #     service_method : str
+    #     request_rule: ROSRESTRuleDetail
+    #     response_rule: ROSRESTRuleDetail
+    class ROSRESTRule(BaseModel):
+        service_name: str
+        service_uri: str
+        service_method : str
+        request_rule: Dict[str,Any]
+        response_rule: Dict[str,Any]        
+
+
+    class ROSRESTStopRule(BaseModel):
+        id: str
+
     app = FastAPI()
-    agent = None    
+    agent :RosWsGatewayAgent= None    
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--port", type=int,
@@ -80,9 +106,9 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
 
     @app.on_event("startup")
     def task_start():
-        global agent, options
+        global agent, options, rest_agent
         mlogger.debug("Command option is %s", options)
-        agent = RosWsGatewayAgent(loop=asyncio.get_event_loop())        
+        agent = RosWsGatewayAgent(loop=asyncio.get_event_loop())               
         if options.file:
             with open(options.file) as json_file:
                 configs = json.load(json_file)
@@ -197,7 +223,7 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
         return results
     
 
-    @app.post('/gateway/add/publish',
+    @app.post('/gateway/publisher/add',
         summary="Add publish rule to the gateway",
         description="request to add publish rules to the gateway",       
         responses={
@@ -210,7 +236,7 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
             },
         },    
     )
-    async def add_gateway_publish(
+    async def publisher_add(
         rule: GatewayRule = Body(
             ...,
             example= {
@@ -222,10 +248,10 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
         ),
     ):
         global agent
-        results = agent.api_add_publish(rule.address, rule.publish)
+        results = agent.api_publisher_add(rule.address, rule.publish)
         return results
 
-    @app.post('/gateway/add/subscribe',
+    @app.post('/gateway/subscriber/add',
         summary="Add subscribe rule to the gateway",
         description="request to add subscribe rules to the gateway ",    
         responses={
@@ -238,7 +264,7 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
             },
         },     
     )
-    async def add_gateway_subscribe(
+    async def subscriber_add(
         rule: GatewayRule = Body(
             ...,
             example= {
@@ -250,7 +276,7 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
         ),
     ):
         global agent
-        results = agent.api_add_subscribe(rule.address, rule.subscribe)
+        results = agent.api_subscriber_add(rule.address, rule.subscribe)
         return {"result": results}
 
     @app.get('/gateway',
@@ -271,7 +297,7 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
         gw_list = agent.api_get_gw_list()
         return gw_list
 
-    @app.put('/gateway/remove/publish',
+    @app.put('/gateway/publisher/remove',
         summary="Remove Forwarding(publish) from gateway",
         description="request to remove subscribe rules from the gateway",
         responses={
@@ -291,7 +317,7 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
             },
         },    
     )
-    async def remove_gateway_publish(
+    async def publisher_remove(
         rule: GatewayRule = Body(
             ...,
             example= {
@@ -304,12 +330,12 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
         ),
     ):
         global agent
-        results = agent.api_remove_publish(rule.address, rule.publish)
+        results = agent.api_publisher_remove(rule.address, rule.publish)
         if results != "ok":
             return JSONResponse(status_code=404, content=results)
         return results
 
-    @app.put('/gateway/remove/subscribe',
+    @app.put('/gateway/subscriber/remove',
         summary="Remove subscriptions from gateway",
         description="request to remove subscribe rules from the gateway",
         responses={
@@ -329,7 +355,7 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
             },
         },     
     )
-    async def remove_gateway_subscribe(
+    async def subscriber_remove(
         rule: GatewayRule = Body(
             ...,
             example= {
@@ -338,12 +364,176 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
                     {"name":"/example_topic", "messageType":"std_msgs/msg/String"},
                     {"name":"/my_topic", "messageType":"std_msgs/msg/String"}
                 ],
+            },           
+        ),
+    ):
+        global agent
+        results = agent.api_subscriber_remove(rule.address, rule.subscribe)
+        return {"result": results} 
+
+
+############  ros-rest
+############
+
+    @app.post('/gateway/rosrest/add',
+        summary="Add ROS-REST Mapping",
+        description="add ROS-REST mapping",
+        responses={
+            200: {"description": "operation success",
+                "content": {
+                    "application/json": {
+                        "example" : "ok" 
+                    },
+                },
+            },
+        },    
+    )
+
+    async def rosrest_add(
+        rule: ROSRESTRule = Body(
+            ...,
+            examples={
+                'file' : {
+                    "summary": "File Up/Down example",
+                    "description": "Post a file and receives a file response example",
+                    "value": {
+                        'service_name': 'detect service',
+                        'service_uri' : 'http://localhost:9001/detect/',                
+                        'service_method' : 'POST',
+                        'request_rule' : { 
+                            'content-type': 'multipart/form-data',
+                            'topics' : {
+                                '/image1' : 'sensor_msgs/msg/CompressedImage'
+                            },
+                            'mapping' : [
+                                { 
+                                    'in': '/image1', 'from' : 'data',  
+                                    'out' : 'files', 'to': 'files' 
+                                }
+                            ],
+                        },
+                        'response_rule' : { 
+                            'content-type': 'image/jpeg',
+                            'topics': {'/target': 'sensor_msgs/msg/CompressedImage'},
+                            'mapping' : [
+                                {
+                                    'in': 'content', 'from' : '', 
+                                    'out' : '/target', 'to': ''
+                                },
+                            ],                                        
+                        },
+                    },
+                },
+                'json' : {  # At present  . I modify this rule
+                    "summary": "JSON request/Json Response example",
+                    "description": "Post a JSON body and receives a JSON response example",
+                    "value": {
+                        'service_name': 'joint state update service',
+                        'service_uri' : 'http://localhost:9001/joint/', 
+                        'service_method' : 'POST',
+                        'request_rule' : { 
+                            'content-type': 'application/json',
+                            'topics' : {
+                                '/joint1' : 'sensor_msgs/msg/JointState'
+                            },
+                            'mapping' : [
+                                { 
+                                    'in': '/joint1', 'from' : 'name',   # [ROS]JointState.name -->
+                                    'out' : 'body', 'to': 'category/name'  #  { 'category' : { 'name' : xxx}}
+                                },
+                            ],                    
+                        },
+                        'response_rule' : { 
+                            'content-type': 'application/json',
+                            'topics': {'/targetJoint': 'sensor_msgs/msg/JointState'},
+                            'mapping' : [
+                                {
+                                    # 'from' can be 'in' of SWAGGER spec:'topic of request', body, query, header, path
+                                    'in': '/joint1', 'from' : 'name',   # reqeust의 데이터를 response에 활용
+                                    'out' : '/targetJoint', 'to': 'name'
+                                },
+                                {
+                                    'in': 'body', 'from' : 'position', 
+                                    'out' : '/targetJoint', 'to': 'position'
+                                },
+                                { 
+                                    'in': 'body', 'from' : 'velocity',  
+                                    'out' : '/targetJoint', 'to': 'velocity'
+                                },
+                                { 
+                                    'in': 'body', 'from' : 'effort', 
+                                    'out' : '/targetJoint', 'to': 'effort'
+                                },
+                            ],  
+                        },                   
+                    },
+                },
+            },
+        ),
+    ):
+        global agent        
+        results = agent.api_rosrest_add(rule)
+        return {"result": results} 
+
+############  ros-rest lists
+############
+    @app.get('/gateway/rosrest/lists',
+        summary="get ROS-REST Mapping lists",
+        description="get ROS-REST Mapping lists",
+        responses={
+            200: {"description": "operation success",
+                "content": {
+                    "application/json": {
+                        "detail" : "..." 
+                    },
+                },
+            },
+        },    
+    )
+
+    async def rosrest_lists():        
+        global agent        
+        results = agent.api_rosrest_lists()
+        return {"results": results} 
+
+############  ros-rest stop
+############
+    @app.put('/gateway/rosrest/stop',
+        summary="Stop ROS-REST mapping process",
+        description="Stop ROS-REST mapping process",
+        responses={
+            404: {"description": "The requested rule was not found", 
+                "content": {
+                    "application/json" : {
+                        "example" : "unknown rule id" 
+                    },
+                },
+            },            
+            200: {"description": "Success",
+                "content": {
+                    "application/json" : {
+                        "example" : "ok" 
+                    },
+                },
+            },
+        },    
+    )
+    async def rosrest_stop(
+        rule: ROSRESTStopRule = Body(
+            ...,
+            example= {
+                'id' : 'id-required-',
             },
         ),
     ):
         global agent
-        results = agent.api_remove_subscribe(rule.address, rule.subscribe)
-        return {"result": results} 
+        results = agent.api_rosrest_stop(rule.id)
+        if results != "ok":
+            return JSONResponse(status_code=404, content=results)
+        return { 'results': results }
+
+
+#####################
 
     @app.websocket('/')
     async def ros_ws_endpoint(websocket:WebSocket):

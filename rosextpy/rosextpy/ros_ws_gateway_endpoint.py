@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 # rosextpy.ros_ws_gateway_client (ros2-ws-gateway)
-# Author: paraby@gmail.com
+# Author: parasby@gmail.com
 """ros_ws_gateway_client
 """
 
@@ -30,8 +30,8 @@ import asyncio
 import logging
 import traceback
 #from node_manager import NodeManager
-from .ros_ws_gateway import RosWsGateway
-from .websocket_utils import ConnectionManager, WebSocketInterface, WebSocketDisconnect, register_ws_route
+from rosextpy.ros_ws_gateway import RosWsGateway
+from rosextpy.websocket_utils import ConnectionManager, WebSocketInterface, WebSocketDisconnect, register_ws_route
 
 mlogger = logging.getLogger('ros_ws_gateway_endpoint')
 

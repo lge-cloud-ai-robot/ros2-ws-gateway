@@ -5,3 +5,5 @@ pybind11
 websockets==10.0
 cbor==1.0.0
 pybase64==1.2.0
+requests
+Pillow

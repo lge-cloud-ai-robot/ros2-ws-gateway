@@ -21,19 +21,22 @@
 # SOFTWARE.
 
 # rosextpy.ros_gateway_agent (ros2-ws-gateway)
-# Author: paraby@gmail.com
+# Author: parasby@gmail.com
 """ros_gateway_agent
 """
 from asyncio.tasks import Task
 import logging
 import asyncio
 import threading
-from typing import List, Dict
+from typing import List, Dict, Any
 from tenacity import retry, wait
 import tenacity
 import traceback
+import hashlib
 from tenacity.retry import retry_if_exception
 from tenacity.stop import stop_after_attempt, stop_when_event_set
+from pydantic import BaseModel
+import requests
 
 ## configuration module have to be importedbefore any other sub modules
 #from ..mod_config import WS_CONFIG 
@@ -43,6 +46,7 @@ from rosextpy.ros_ws_gateway_client import RosWsGatewayClient, isNotForbbiden
 from rosextpy.node_manager import NodeManager
 from rosextpy.ros_ws_gateway_endpoint import RosWsGatewayEndpoint
 from rosextpy.ros_ws_gateway import RosWsGateway
+from rosextpy.ros_rpc_gateway_client import RosRPCGatewayClient
 
 mlogger = logging.getLogger('ros_gateway_agent')
 
@@ -53,6 +57,13 @@ def logerror(retry_state: tenacity.RetryCallState):
 ##
 ##  GatewayTaskLog : it stores the gateway tasks(pub/sub...)
 #########################
+
+class ROSRESTRule(BaseModel):
+    service_name: str
+    service_uri: str
+    service_method : str
+    request_rule: Dict[str,Any]
+    response_rule: Dict[str,Any]
 
 class GatewayTaskLog():
     def __init__(self, address, title, active):
@@ -125,6 +136,25 @@ class GatewayTaskLog():
             self.config['subscribe'].remove(x)
 
 
+######################
+# DefaultRPCManager
+#######################
+class DefaultRPCManager:  
+    def __init__(self):        
+        pass        
+
+    def call(self, service_uri, service_method, data = None, files=None):
+        mlogger.debug("emulate to send action result to action caller.............")
+        try:
+            if service_method == 'POST':
+                return requests.post(service_uri, files=files, data=data)
+        except Exception as err:
+            mlogger.debug("An error occurred in requests due to [%s]", err)
+            return None
+
+    def close(self):
+        pass
+
 ########################
 ##
 ##  RosWsGatewayAgent : create gateway_endpoint, and manage gateway_client
@@ -138,9 +168,11 @@ class RosWsGatewayAgent():
         self.node_manager = NodeManager()
         self.node_manager.setDaemon(True)
         self.node_manager.start()
+        self.rpc_manager = DefaultRPCManager()
         self.endpoint = RosWsGatewayEndpoint(node_manager = self.node_manager)
         self.gw_task_logs : Dict[str, GatewayTaskLog] = {}
         self.gw_map : Dict[str, RosWsGatewayClient] ={}
+        self.rpc_map: Dict[str, RosRPCGatewayClient] = {}
         self.gw_tasks : Dict[str, Task] = {}
         self.gw_tasks_lock = threading.RLock()     
         self.loop = loop if loop is not None else asyncio.get_event_loop()
@@ -329,7 +361,7 @@ class RosWsGatewayAgent():
             pass           
 
 
-    def api_add_publish(self, uri: str, rule: List[Dict[str,str]]):
+    def api_publisher_add(self, uri: str, rule: List[Dict[str,str]]):
         """ set the ROS message forwarding configuration to the specified gateway.
             It causes configured ROS messages to be delivered to the specified gateway.
         Args:
@@ -357,7 +389,7 @@ class RosWsGatewayAgent():
             mlogger.debug(traceback.format_exc())
             pass
 
-    def api_add_subscribe(self, uri: str, rule: List[Dict[str,str]]):
+    def api_subscriber_add(self, uri: str, rule: List[Dict[str,str]]):
         """ set the ROS message pulling configuration to the specified gateway.
             It causes the configured ROS messages of the specified gateway to be delivered to its own gateway.
         Args:
@@ -385,7 +417,7 @@ class RosWsGatewayAgent():
 #            traceback.print_stack()
             pass   
 
-    def api_remove_publish(self, uri: str, rule: List[Dict[str,str]]):
+    def api_publisher_remove(self, uri: str, rule: List[Dict[str,str]]):
         """ stops the ROS message forwarding for the specified gateway
         Args:
             uri : target gateway address
@@ -410,7 +442,7 @@ class RosWsGatewayAgent():
             mlogger.debug(traceback.format_exc())
             pass
 
-    def api_remove_subscribe(self, uri: str, rule: List[Dict[str,str]]):
+    def api_subscriber_remove(self, uri: str, rule: List[Dict[str,str]]):
         """ requests the specified gateway to stop sending ROS messages to its own gateway.
         Args:
             uri : target gateway address
@@ -433,7 +465,7 @@ class RosWsGatewayAgent():
                 return "unknown gateway address"
         except Exception:
             mlogger.debug(traceback.format_exc())
-            pass       
+            pass
 
     def api_get_config(self, rule: List[str]):
         """
@@ -465,6 +497,101 @@ class RosWsGatewayAgent():
         mlogger.debug("api_get_topic_list")
         topic_list = self.node_manager.get_topic_list()
         return topic_list        
+
+
+    def api_rosrest_add(self, rule : ROSRESTRule):
+        """ add rot-to-rest binding configuration              
+
+        ##  key is (output topic + service_uri + input_topic)
+        Args:
+            rule: ros-rest binding config            
+        Returns:
+            { "id" : id}
+        Examples:
+            api_add_ros_rest("{}")
+        """
+        mlogger.debug("api_add_ros_rest %s", rule)
+        try:
+            v = [ *list(rule.response_rule['topics'].keys()), 
+                    rule.service_uri, *list(rule.request_rule['topics'].keys())]            
+            _utxt = '<'.join(v)
+            _ho = hashlib.sha256(_utxt.encode())
+            _ukey = _ho.hexdigest()            
+            _gw : RosRPCGatewayClient = self.rpc_map.get(_ukey, None)
+            if _gw:                
+                 _gw.reset(rule.request_rule, rule.response_rule)
+            else:
+                _gw = RosRPCGatewayClient(self.node_manager, self.rpc_manager, rule.service_uri, 
+                        rule.service_method, rule.request_rule, rule.response_rule)                                
+                self.rpc_map[_ukey] =  _gw
+            return { "id" : _ukey}
+        except Exception:
+            mlogger.debug(traceback.format_exc())
+            pass
+
+    def api_rosrest_lists(self):
+        """ add rot-to-rest binding configuration      
+        Returns:
+             [  
+                { 
+                    'id' : id,
+                    'service_uri': uri,
+                    'request_rule' : {
+                        'topics': {
+                            topicName : topicType
+                        },
+                    },                
+                    'response_rule' : {
+                        'topics': {
+                            topicName : topicType
+                        },
+                    },
+                },
+            ]
+        Examples:
+            api_add_ros_rest("{}")
+        """
+        mlogger.debug("api_ros_rest_lists ")
+        try:
+            results = []
+            for k, v in self.rpc_map.items():                
+                value = { 
+                    'id' : k,
+                    'service_uri': v.service_uri,
+                    'request_rule': {
+                        'topics' : v.request_rule['topics']
+                    },
+                    'response_rule': {
+                        'topics' : v.response_rule['topics']
+                    }
+                }
+                results.append(value)
+            return results
+        except Exception:
+            mlogger.debug(traceback.format_exc())
+            pass 
+
+    def api_rosrest_stop(self, id: str):
+        """ requests the specified ROS-REST Mapping process .
+        Args:
+            id : ROS-REST mapping rule id
+        Returns:
+            "ok" If successful, "unknown rule id" otherwise.
+        Examples:
+            api.api_rosrest_stop("target-id-to-stop-process")
+        """          
+        mlogger.debug("api_rosrest_stop %s", id)
+        try:
+            gw = self.rpc_map.get(id, None)
+            if gw:
+                gw.close()
+                self.rpc_map.pop(id)
+                return "ok"
+            else:
+                return "unknown rule id"
+        except Exception:
+            mlogger.debug(traceback.format_exc())
+            pass               
 
     async def close(self):
         """ close all client connections and the gateway endpoint service

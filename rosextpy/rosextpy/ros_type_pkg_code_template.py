@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 # rosextpy.ros2_pkg_code_gen (ros2-ws-gateway)
-# Author: paraby@gmail.com
+# Author: parasby@gmail.com
 
 
 ROS2_TYPE_PKG_CMAKE_TEMPLATE="\

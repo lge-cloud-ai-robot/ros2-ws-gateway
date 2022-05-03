@@ -20,21 +20,21 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-# filename: rosextpy.ros-ws-gateway
-# author: paraby@gmail.com
+# filename: rosextpy.ros_ws_gateway
+# author: parasby@gmail.com
 
-
+import sys
 import asyncio
+import threading
 import json
 import uuid
 import logging
 import traceback
-from typing import List, Dict
+from typing import List, Dict, Tuple, Any
 import cbor
-#from .node_manager import NodeManager
-from rosextpy.node_manager import NodeManager
-
-from .ext_type_support import RosJsonEncodder
+from rosextpy.websocket_utils import WebSocketDisconnect
+from rosextpy.node_manager import NodeManager, ROSServiceFailException
+from rosextpy.ext_type_support import RosJsonEncodder, ros_to_json, ros_from_json
 
 mlogger = logging.getLogger('ros_ws_gateway')
 
@@ -94,8 +94,26 @@ class RosWsGateway():
             "unadvertise": self._op_unadvertise,
             "publish": self._op_publish,
             "subscribe": self._op_subscribe,
-            "unsubscribe": self._op_unsubscribe,
+            "unsubscribe": self._op_unsubscribe,            
             "status" : self._op_status,
+            "call_service": self._op_call_service, 
+                    # The gateway receives a call service from another gateway through the websocket
+            "service_response": self._op_service_response,
+                    # The gateway receives a json service response and send ROS service response in the local client
+            "advertise_service": self._op_advertise_service, 
+                    # The gateway plays a role of a service server in the local network
+            "unadvertise_service": self._op_unadvertise_service, 
+                    # The gateway stops the role of a service server
+            "call_action": self._op_call_action,              
+                    # The gateway receives a ROS call action and send a JSON call action to another gateway
+            "action_result": self._op_action_result, 
+                    # The gateway receives an action result from another gateway and publishes the result in the local network.
+            "action_feedback": self._op_action_feedback, 
+                    # The gateway receives an action feedback from another gateway and publishes the feedback in the local network.
+            "advertise_action": self._op_advertise_action, 
+                    # The gateway plays a role of a action server in the local network
+            "unadvertise_action": self._op_unadvertise_action, 
+                    # The gateway stops the role of a action server
         }
         self.published_topic : Dict[str,str] = {}
         self.subscribed_topic : Dict[str,str] = {}
@@ -111,14 +129,17 @@ class RosWsGateway():
         self._closed = asyncio.Event(loop=self.loop)
         self._context = kwargs or {}
         self._batch_task = None
+        self._adv_services : Dict[str, Dict[str,Any]] = {}
+        self._adv_action_servers : Dict[str, Dict[str,Any]] = {}
 
     async def send(self, data, israw=False):
-        mlogger.debug("send %s", type(data))
+        mlogger.debug("send %s", type(data))        
         try:
             if israw:                
                 message = cbor.dumps(data)
             else:
-                message = json.dumps(data, cls=RosJsonEncodder)
+#                message = json.dumps(data, cls=RosJsonEncodder)
+                message = ros_to_json(data)
         except Exception:
             mlogger.error(traceback.format_exc())
 
@@ -129,12 +150,46 @@ class RosWsGateway():
     async def receive(self):
         return await self.wshandle.recv()
 
+    async def _clear_act_pending_task(self, action_name):
+        mlogger.debug("_clear_act_pending_task")
+        t_ctx = self._adv_action_servers.get(action_name,None)
+        if t_ctx:
+            t_called =t_ctx['called'] 
+            for (ft_fut, goal_handle, resp_cls , feed_cls) in t_called.values():
+                goal_handle.abort()
+                ft_fut.set_result(resp_cls())
+
+    async def _clear_srv_pending_task(self,srv_name):
+        mlogger.debug("_clear_srv_pending_task")
+        t_svc_ctx = self._adv_services.get(srv_name,None)
+        if t_svc_ctx:
+            t_called =t_svc_ctx['called'] 
+            for (ft_fut, _) in t_called.values():
+                ft_fut.cancel()
+                ft_fut.set_exception(ROSServiceFailException(srv_name))
+            
+
+    async def _clear_all_pending_task(self):
+        mlogger.debug("_clear_all_pending_task")
+        for t_svc_name in self._adv_services.keys():
+            await self._clear_srv_pending_task(t_svc_name)
+            self.node_manager.destroy_srv_service(t_svc_name)
+
+        for t_act_name in self._adv_action_servers.keys():
+            await self._clear_act_pending_task(t_act_name)
+            self.node_manager.destroy_action_server(t_act_name)
+
+
     async def close(self):
         mlogger.debug("close")
         try :
             res = await self.wshandle.close()
             self._closed.set()
-            self._batch_task.cancel()
+            await self._clear_all_pending_task()
+            self._adv_services.clear()
+            if self._batch_task:
+                self._batch_task.cancel()
+                self._batch_task = None
             if self.node_manager:     
                 self.node_manager.remove_with_gateway(self.bridge_id)
             await self.on_handler_event(self._disconnect_handlers, self)
@@ -149,6 +204,16 @@ class RosWsGateway():
     async def wait_until_closed(self):
         return await self._closed.wait()
 
+    # async def spin(self):
+    #     try:
+    #         while not self.is_closed():
+    #             mesg = await self.receive()
+    #             if not mesg:
+    #                 raise WebSocketDisconnect
+    #             await self.on_message(mesg)
+    #     except Exception:
+    #         raise
+   
     async def on_message(self, data):
         mlogger.debug("on_message %s", data)
 ##        print("received ", data)
@@ -164,14 +229,6 @@ class RosWsGateway():
                 "Some command error message=%s, error=%s", data, err)
             await self.on_error(err)
             raise
-
-    async def on_message_debug(self, data): # for _debug
-        mlogger.debug("on_message_debug")
-        mlogger.debug("received %s", data)
-        # cmd_data = self.parser.parse(data)
-        # if cmd_data['op'] == 'advertise':
-        #     typestr = cmd_data['type']
-
 
     def register_connect_handler(self, coros: List[OnConnectCallback] = None):
         """Register a connection handler callback that will be called 
@@ -222,7 +279,7 @@ class RosWsGateway():
         await self.on_handler_event(self._error_handlers, self, error)
 
     async def _op_advertise(self, cmd_data):
-        mlogger.debug("advertise %s", cmd_data)
+        mlogger.debug("_op_advertises %s", cmd_data)
         topic_name = cmd_data['topic']
         topic_type = self.published_topic.get(topic_name)
 
@@ -240,7 +297,7 @@ class RosWsGateway():
         return "OK"
 
     async def _op_unadvertise(self, cmd_data):
-        mlogger.debug("unadvertise %s", cmd_data)
+        mlogger.debug("_op_unadvertise %s", cmd_data)
         topic = cmd_data['topic']
         if not topic in self.published_topic.keys():
             raise RosWsGatewayException(
@@ -254,7 +311,7 @@ class RosWsGateway():
         return "OK"
 
     async def _op_publish(self, cmd_data): # When encoding is not cbor
-        mlogger.debug("publish %s", cmd_data)
+        mlogger.debug("_op_publish %s", cmd_data)
         topic = cmd_data['topic']
         if not topic in self.published_topic.keys():
             raise RosWsGatewayException(
@@ -270,7 +327,7 @@ class RosWsGateway():
         return "OK"
 
     async def _op_subscribe(self, cmd_data):
-        mlogger.debug("subscribe %s", cmd_data)        
+        mlogger.debug("_op_subscribe %s", cmd_data)        
         try:
             topic_name = cmd_data['topic']
             topic_type = cmd_data['type']
@@ -288,7 +345,7 @@ class RosWsGateway():
         return "OK"
 
     async def _op_unsubscribe(self, cmd_data):
-        mlogger.debug("unsubscribe  %s", cmd_data)
+        mlogger.debug("_op_unsubscribe  %s", cmd_data)
         topic = cmd_data['topic']
         self.subscribed_topic.pop(topic, None)
         if self.node_manager:
@@ -303,6 +360,384 @@ class RosWsGateway():
         mlogger.debug("_op_status  %s", cmd_data)
         return None
 
+
+    #
+    # _op_call_service
+    # command [ 
+    #           service : serviceName    
+    #           type: service type
+    #           args:  service parameters
+    #         ]
+    #
+
+    async def _op_call_service(self, cmd_data):
+        mlogger.debug("_op_call_service  %s", cmd_data)        
+        try:
+            service_name = cmd_data['service']
+            type_name = cmd_data['type']
+            args = cmd_data['args']
+            call_id=cmd_data['id']
+            if self.node_manager:
+                srv_cli = self.node_manager.create_srv_client(
+                    type_name, service_name, self.bridge_id)
+
+                if srv_cli:
+                    srv_cli.call_service_async(args, call_id,
+                        response_callback=self._ros_send_srvcli_response_callback)
+                else:
+                    pass        
+        except Exception:
+            mlogger.error(traceback.format_exc())       
+
+        return "OK"
+
+
+    #
+    # _op_service_response
+    # command [ 
+    #           service : serviceName    
+    #           id: request id
+    #           values:  result of service request
+    #         ]
+    #
+    
+
+    async def _op_service_response(self, cmd_data):
+        mlogger.debug("_op_service_response  %s", cmd_data)
+        service_name = cmd_data['service']
+        ctx =  self._adv_services.get(service_name)
+        if ctx:
+            callid = cmd_data['id']
+            t1 = ctx['called'][callid]
+            if t1:                
+                (rq_future, resp_cls) = t1                
+                res_value = cmd_data['values']
+                ros_response = ros_from_json(res_value, resp_cls)
+                if cmd_data['result']:
+                    rq_future.set_result(ros_response)
+                else:       
+                    rq_future.cancel()             
+                    rq_future.set_exception(ROSServiceFailException(service_name))
+            else:
+                return "Unknon call id"            
+        else:
+            return "Unknown Service"
+
+        return "OK"
+
+    #
+    # advertise_service
+    # command [ 
+    #           service : serviceName
+    #           type    : serviceTypeName
+    #         ]
+    #
+    async def _op_advertise_service(self, cmd_data):
+        mlogger.debug("_op_advertise_service  %s", cmd_data)
+        try:
+            service_name = cmd_data['service']
+            type_name = cmd_data['type']
+            if self.node_manager:
+                srv_svc = self.node_manager.create_srv_service(
+                    type_name, service_name, self.bridge_id, 
+                        callback=self._ros_service_proxy_callback)
+                self._adv_services[service_name] = {'svc' :srv_svc, 'called': {}}
+            
+        except Exception:
+            mlogger.error(traceback.format_exc())
+        return "OK"
+
+    #
+    # _op_unadvertise_service
+    # command [ 
+    #           service : serviceName    
+    #         ]
+    #
+    async def _op_unadvertise_service(self, cmd_data):
+        mlogger.debug("_op_unadvertise_service  %s", cmd_data)
+        try:
+            service_name = cmd_data['service']
+            if self._adv_services.get(service_name,None):
+                await self._clear_srv_pending_task(service_name)
+                self._adv_services.pop(service_name)
+                if self.node_manager:     
+                    self.node_manager.destroy_srv_service(service_name) 
+        
+        except Exception:
+            mlogger.error(traceback.format_exc())       
+        return "OK"
+
+    #
+    # advertise_service
+    # command [ 
+    #           action : actionName
+    #           type    : serviceTypeName
+    #         ]
+    #
+    async def _op_advertise_action(self, cmd_data):
+        mlogger.debug("_op_advertise_action1111  %s", cmd_data)
+        try:
+            action_name = cmd_data['action']
+            type_name = cmd_data['type']
+            if self.node_manager:                
+                act_svc = self.node_manager.create_action_server(
+                    type_name, action_name, self.bridge_id, 
+                        callback=self._ros_action_proxy_callback)                
+                self._adv_action_servers[action_name] = {'svc' :act_svc, 'called': {}}            
+        except Exception:
+            mlogger.error(traceback.format_exc())
+        return "OK"
+
+    async def _op_call_action(self, cmd_data):
+        mlogger.debug("_op_call_action  %s", cmd_data)
+        try:
+            action_name = cmd_data['action']
+            type_name = cmd_data['type']
+            args = cmd_data['args']
+            call_id=cmd_data['id']
+            if self.node_manager:
+                srv_cli = self.node_manager.create_action_client(
+                    type_name, action_name, self.bridge_id)
+
+                if srv_cli:
+                    srv_cli.send_goal_async(args, call_id,
+                        feedback_callback=self._ros_send_actcli_feedback_callback,
+                        action_result_callback=self._ros_send_actcli_result_callback,
+                        goal_accept_callback=self._ros_send_actcli_accept_callback,
+                        goal_reject_callback=self._ros_send_actcli_reject_callback
+                        )
+                else:
+                    pass        
+        except Exception:
+            mlogger.error(traceback.format_exc())       
+
+        return "OK"
+
+
+    # 'op' : 'action_result', 
+    # 'id' : callid,       
+    # 'action' : 'fibonacci',
+    # 'values' : {'sequence' : [0,1,2,3,4,5]},
+    # 'result' : True
+    async def _op_action_result(self, cmd_data):
+        mlogger.debug("_op_action_result  %s", cmd_data)
+        action_name = cmd_data['action']
+        ctx =  self._adv_action_servers.get(action_name)
+        if ctx:
+            callid = cmd_data['id']
+            t1 = ctx['called'][callid]
+            if t1:                
+                (rq_future, goal_handle, resp_cls, feed_cls) = t1
+                res_value = cmd_data['values']
+                ros_response = ros_from_json(res_value, resp_cls)
+                if cmd_data['result']:
+                    goal_handle.succeed()
+                    rq_future.set_result(ros_response)
+                else:                                        
+                    goal_handle.abort()
+                    rq_future.set_result(resp_cls())
+                    #rq_future.cancel()
+                    #rq_future.set_exception(ROSServiceFailException(action_name))
+            else:
+                return "Unknon action call id"
+            
+        else:
+            return "Unknown Action"
+
+        return "OK"
+
+    async def _op_action_feedback(self, cmd_data):
+        mlogger.debug("_op_action_feedback  %s", cmd_data)
+        action_name = cmd_data['action']
+        ctx =  self._adv_action_servers.get(action_name)
+        if ctx:
+            callid = cmd_data['id']
+            t1 = ctx['called'][callid]
+            if t1:                
+                (rq_future, goal_handle, resp_cls, feed_cls) = t1                
+                res_value = cmd_data['values']
+                #print(dir(ctx.act_cls.Feedback))
+                feedback = ros_from_json(res_value, feed_cls)
+                goal_handle.publish_feedback(feedback)
+            else:
+                return "Unknon action call id"
+            
+        else:
+            return "Unknown Action"
+
+        return "OK"
+
+    async def _op_unadvertise_action(self, cmd_data):
+        mlogger.debug("_op_unadvertise_action  %s", cmd_data)
+        try:
+            action_name = cmd_data['action']
+            if self._adv_action_servers.get(action_name,None):
+                await self._clear_act_pending_task(action_name)
+                self._adv_action_servers.pop(action_name)
+                if self.node_manager:     
+                    self.node_manager.destroy_action_server(action_name) 
+        
+        except Exception:
+            mlogger.error(traceback.format_exc())       
+        return "OK"
+
+    def _ros_send_actcli_feedback_callback(self, act_name, call_id, feedback_data):
+        mlogger.debug("_ros_send_actcli_feedback_callback ")                
+        response = {"op": "action_feedback", 
+                    "action": act_name,
+                    "id": call_id,
+                    "value" : feedback_data,                    
+                    "result": True }       
+
+        if isinstance(feedback_data, bytes):
+            if self.raw_type == 'js-buffer':
+                response['value'] = bytesToJSBuffer(feedback_data)
+                israw = False
+            else:
+                israw = True
+        else:
+            israw = False
+
+        asyncio.run_coroutine_threadsafe( self.send(response, israw), self.loop)
+
+    def _ros_send_actcli_result_callback(self, act_name, call_id, result_data):
+        mlogger.debug("_ros_send_actcli_result_callback ")
+        response = {"op": "action_result", 
+                    "action": act_name,
+                    "id": call_id,
+                    "value" : result_data,                    
+                    "result": True }
+
+        if isinstance(result_data, bytes):
+            if self.raw_type == 'js-buffer':
+                response['value'] = bytesToJSBuffer(result_data)
+                israw = False
+            else:
+                israw = True
+        else:
+            israw = False
+
+        asyncio.run_coroutine_threadsafe( self.send(response, israw), self.loop)
+
+    def _ros_send_actcli_accept_callback(self, act_name, call_id, goal_handle):
+        mlogger.debug("_ros_send_actcli_accept_callback ")
+        # response = {"op": "action_accept", 
+        #             "action": act_name,
+        #             "id": call_id,
+        #             "value" : result_data,                    
+        #             "result": True }
+
+        # print("RESULT IS ", response)
+
+        # if isinstance(result_data, bytes):
+        #     if self.raw_type == 'js-buffer':
+        #         response['value'] = bytesToJSBuffer(result_data)
+        #         israw = False
+        #     else:
+        #         israw = True
+        # else:
+        #     israw = False
+
+        # asyncio.run_coroutine_threadsafe( self.send(response, israw), self.loop)
+
+    def _ros_send_actcli_reject_callback(self, act_name, call_id, goal_handle):
+        mlogger.debug("_ros_send_actcli_reject_callback ")
+        # response = {"op": "action_reject", 
+        #             "action": act_name,
+        #             "id": call_id,
+        #             "value" : result_data,                    
+        #             "result": True }
+
+        # print("RESULT IS ", response)
+
+        # if isinstance(result_data, bytes):
+        #     if self.raw_type == 'js-buffer':
+        #         response['value'] = bytesToJSBuffer(result_data)
+        #         israw = False
+        #     else:
+        #         israw = True
+        # else:
+        #     israw = False
+
+        # asyncio.run_coroutine_threadsafe( self.send(response, israw), self.loop)
+
+    async def _ros_action_proxy_callback(self, action_name, action_type, goal_handle):
+        mlogger.debug("_ros_action_proxy_callback")
+
+        callid = str(uuid.uuid4())
+
+        callmsg = {'op' : 'call_action', 'id' : callid,
+                'action' : action_name, 'type' : action_type,
+                'args' : ros_to_json(goal_handle._goal_request)
+            }
+        ctx = self._adv_action_servers.get(action_name)
+        if ctx:
+            rq_future = ctx['svc'].get_waiter()  # get future from ros context
+            ctx['called'][callid] = (rq_future, goal_handle, 
+                        ctx['svc'].get_result_class(), ctx['svc'].get_feedback_class())            
+            await self.send(callmsg)       # send func. is called from ROS loop
+            try:
+                return await rq_future # wait response and return it to ROS rclpy logic
+            except ROSServiceFailException:                
+                mlogger.debug("The call_action for [%s] gets an error", action_name)
+                raise
+            finally:
+                if self._adv_action_servers.get(action_name,None):
+                    del self._adv_action_servers[action_name]['called'][callid]                
+        else:            
+            mlogger.debug("The service [%s] was not advertised", action_name)  
+            raise ROSServiceFailException(action_name)
+
+
+    async def _ros_service_proxy_callback(self, srv_name, srv_type, request, response):
+        mlogger.debug("_ros_service_proxy_callback")
+        # this callback is called from ROS executor
+        
+        callid = str(uuid.uuid4())
+
+        callmsg = {'op': 'call_service', 'id': callid, 
+                'service': srv_name, 'type' : srv_type,
+                'args' : ros_to_json(request)
+            }        
+        ctx =  self._adv_services.get(srv_name)        
+        if ctx:
+            rq_future = ctx['svc'].get_waiter()  # get future from ros context
+            ctx['called'][callid] = (rq_future, ctx['svc'].get_response_class())            
+            await self.send(callmsg)       # send func. is called from ROS loop
+            try:
+                return await rq_future # wait response and return it to ROS rclpy logic
+            except ROSServiceFailException:                
+                mlogger.debug("The call_service for [%s] gets an error", srv_name)
+                raise
+            finally:
+                if self._adv_services.get(srv_name,None):
+                    del self._adv_services[srv_name]['called'][callid]                
+        else:            
+            mlogger.debug("The service [%s] was not advertised", srv_name)  
+            raise ROSServiceFailException(srv_name)
+
+
+
+    def _ros_send_srvcli_response_callback(self, srv_name, call_id, res_mesg):# node_manager needs sync callback
+        mlogger.debug("_ros_send_srvcli_response_callback ")                
+        response = {"op": "service_response", 
+                    "service": srv_name,
+                    "value" : res_mesg,
+                    "id": call_id,
+                    "result": True }
+
+        if isinstance(res_mesg, bytes):
+            if self.raw_type == 'js-buffer':
+                response['value'] = bytesToJSBuffer(res_mesg)
+                israw = False
+            else:
+                israw = True
+        else:
+            israw = False
+
+        asyncio.run_coroutine_threadsafe( self.send(response, israw), self.loop)
+        
+
     def _ros_send_subscription_callback(self, topic_name, mesg):# node_manager needs sync callback
         mlogger.debug("sendSubscription  %s", topic_name)
         response = {"op": "publish", "topic": topic_name, "msg": mesg}
@@ -316,6 +751,7 @@ class RosWsGateway():
             israw = False
 
         asyncio.run_coroutine_threadsafe( self.send(response, israw), self.loop)
+
 
     async def _send_back_operation_status(self, opid, msg='', level='none'):
         mlogger.debug("sendBackOperationStatus id= %s", opid)
