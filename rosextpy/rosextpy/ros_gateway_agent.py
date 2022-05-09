@@ -231,7 +231,7 @@ class RosWsGatewayAgent():
 
                 self.gw_task_logs[uri] = task_log   
 #                print("CONNECT CONFIG", config)             
-#                print("CONNECT TASSK CONFIG", task_config)             
+#                print("CONNECT TASSK CONFIG", task_config)
 
                 if task_config:
                     if 'publish' in task_config:                        
@@ -242,13 +242,18 @@ class RosWsGatewayAgent():
                         for sub in task_config['subscribe']:                            
                             israw =sub.get('israw', False)
                             client.add_subscribe( sub['name'], sub['messageType'], israw)
+                    if 'expose-service' in task_config:
+                        for rule in task_config['expose-service']:                            
+                            israw =rule.get('israw', False)
+                            client.expose_service( rule['service'], rule['serviceType'], israw)
+                    if 'expose-action' in task_config:
+                        for rule in task_config['expose-action']:                            
+                            israw =rule.get('israw', False)
+                            client.expose_action( rule['action'], rule['actionType'], israw)
                 await client.wait_on_reader()                
         except Exception as ex:
             # some error will be forwarded to retry connection
-            # mlogger.debug(traceback.format_exc(), ex)
-#            print("DEBUG===EEEEEEEEEEEEEEEEEEEEEEE")
-#            print(traceback.format_exc(), ex) # DEBUG
-#            print("DEBUG=========================")
+            mlogger.debug(traceback.format_exc())
             raise
         finally:
             self.gw_map.pop(uri, None)
@@ -373,7 +378,7 @@ class RosWsGatewayAgent():
             api.add_publish("ws://targetgw",
                 [{name:"/my_topic", messageType:"std_msgs/msg/String", israw: False}])
         """
-        mlogger.debug("api_add_publish %s", uri)        
+        mlogger.debug("api_publisher_add %s", uri)        
         try:
             gw = self.gw_map.get(uri, None)
             if gw:
@@ -401,7 +406,7 @@ class RosWsGatewayAgent():
             api.add_subscribe("ws://targetgw",
                 [{name:"/my_topic", messageType:"std_msgs/msg/String"}])
         """        
-        mlogger.debug("api_add_subscribe %s", uri)
+        mlogger.debug("api_subscriber_add %s", uri)
         try:
             gw = self.gw_map.get(uri, None)
             if gw:
@@ -428,7 +433,7 @@ class RosWsGatewayAgent():
             api.api_remove_publish("ws://targetgw",
                 [{name:"/my_topic", messageType:"std_msgs/msg/String"}])
         """        
-        mlogger.debug("api_remove_publish %s", uri)
+        mlogger.debug("api_publisher_remove %s", uri)
         try:
             gw = self.gw_map.get(uri, None)
             if gw:
@@ -453,7 +458,7 @@ class RosWsGatewayAgent():
             api.api_remove_subscribe("ws://targetgw",
                 [{name:"/my_topic", messageType:"std_msgs/msg/String"}])
         """          
-        mlogger.debug("api_remove_subscribe %s", uri)
+        mlogger.debug("api_subscriber_remove %s", uri)
         try:
             gw = self.gw_map.get(uri, None)
             if gw:
@@ -466,6 +471,112 @@ class RosWsGatewayAgent():
         except Exception:
             mlogger.debug(traceback.format_exc())
             pass
+
+    def api_service_expose(self, uri: str, rule: List[Dict[str,str]]):
+        """ set the service to be exposed to the specified gateway.            
+        Args:
+            uri : target gateway address
+            rule (List[str]): list of service expose rule        
+        Returns:
+            "ok" 
+        Examples:
+            api.api_service_expose("ws://targetgw",
+                [{service:"add_two_ints", "serviceType:"srv_tester_if.srv.AddTwoInts"}])
+        """        
+        mlogger.debug("api_service_expose %s", uri)
+        try:
+            gw = self.gw_map.get(uri, None)
+            if gw:
+                for srv in rule:                    
+                    gw.expose_service( srv['service'], srv['serviceType'],srv.get('israw', False))
+            else:
+                temp_config = { 'address' : uri, 'expose-service': rule}
+                self._run_gateway_task(uri, temp_config)
+
+            return "ok"
+        except Exception:
+            mlogger.debug(traceback.format_exc())
+#            traceback.print_stack()
+            pass
+
+
+    def api_action_expose(self, uri: str, rule: List[Dict[str,str]]):
+        """ set the action to be exposed to the specified gateway.            
+        Args:
+            uri : target gateway address
+            rule (List[str]): list of action expose rule        
+        Returns:
+            "ok" 
+        Examples:
+            api.api_action_expose("ws://targetgw",
+                [{action:"fibonacci", actionType:"action_tester_if.action.Fibonacci"}])
+        """        
+        mlogger.debug("api_action_expose %s", uri)
+        try:
+            gw = self.gw_map.get(uri, None)
+            if gw:
+                for act in rule:                    
+                    gw.expose_action( act['action'], act['actionType'],act.get('israw', False))
+            else:
+                temp_config = { 'address' : uri, 'expose-action': rule}
+                self._run_gateway_task(uri, temp_config)
+
+            return "ok"
+        except Exception:
+            mlogger.debug(traceback.format_exc())
+#            traceback.print_stack()
+            pass
+
+
+    def api_service_hide(self, uri: str, rule: List[Dict[str,str]]):
+        """ requests the specified gateway to stop send ROS srv request
+        Args:
+            uri : target gateway address
+            rule (List[str]): list of exposed ROS service to be hidden
+        Returns:
+            "ok" If successful, "unknown gateway address" otherwise.
+        Examples:
+            api.api_service_hide("ws://targetgw",
+                [{service:"add_two_ints"}])
+        """          
+        mlogger.debug("api_service_hide %s", uri)
+        try:
+            gw = self.gw_map.get(uri, None)
+            if gw:
+                for srv in rule:                    
+                    gw.hide_service(srv['service'])                    
+
+                return "ok"
+            else:
+                return "unknown gateway address"
+        except Exception:
+            mlogger.debug(traceback.format_exc())
+            pass   
+
+    def api_action_hide(self, uri: str, rule: List[Dict[str,str]]):
+        """ requests the specified gateway to stop send ROS action request
+        Args:
+            uri : target gateway address
+            rule (List[str]): list of exposed ROS action to be hidden
+        Returns:
+            "ok" If successful, "unknown gateway address" otherwise.
+        Examples:
+            api.api_action_hide("ws://targetgw",
+                [{action:"fibonacci"])
+        """          
+        mlogger.debug("api_action_hide %s", uri)
+        try:
+            gw = self.gw_map.get(uri, None)
+            if gw:
+                for act in rule:                    
+                    gw.hide_action(act['action'])                    
+
+                return "ok"
+            else:
+                return "unknown gateway address"
+        except Exception:
+            mlogger.debug(traceback.format_exc())
+            pass      
 
     def api_get_config(self, rule: List[str]):
         """
@@ -496,8 +607,7 @@ class RosWsGatewayAgent():
         """
         mlogger.debug("api_get_topic_list")
         topic_list = self.node_manager.get_topic_list()
-        return topic_list        
-
+        return topic_list
 
     def api_rosrest_add(self, rule : ROSRESTRule):
         """ add rot-to-rest binding configuration              

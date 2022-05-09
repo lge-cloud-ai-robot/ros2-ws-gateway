@@ -38,11 +38,11 @@ logging.basicConfig(stream=sys.stdout, format='%(levelname)-6s [%(filename)s:%(l
 mlogger = logging.getLogger('ros_agent_main')
 mlogger.setLevel(logging.DEBUG)
 logging.getLogger('ros_rpc_gateway_client').setLevel(logging.DEBUG)
-#logging.getLogger('ros_gateway_agent').setLevel(logging.DEBUG)
-#logging.getLogger('ros_ws_gateway').setLevel(logging.DEBUG)
-#logging.getLogger('ros_ws_gateway_client').setLevel(logging.DEBUG)
-#logging.getLogger('node_manager').setLevel(logging.DEBUG)
-#logging.getLogger('websocket_utils').setLevel(logging.DEBUG)
+logging.getLogger('ros_gateway_agent').setLevel(logging.DEBUG)
+logging.getLogger('ros_ws_gateway').setLevel(logging.DEBUG)
+logging.getLogger('ros_ws_gateway_client').setLevel(logging.DEBUG)
+logging.getLogger('node_manager').setLevel(logging.DEBUG)
+logging.getLogger('websocket_utils').setLevel(logging.DEBUG)
    
 if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
     from fastapi import Body, FastAPI, WebSocket, status, BackgroundTasks    
@@ -53,17 +53,6 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
     import json 
     import uvicorn
 
-    class GatewayOperationType(str, Enum):
-        add = 'add'
-        remove = 'remove'
-        disconnect = 'disconnect'
-
-    class GatewayOperation(BaseModel):
-        address: str
-        operation: GatewayOperationType
-        publish: List[Dict[str,str]]=None
-        subscribe: List[Dict[str,str]]=None
-
     class GatewayAddresses(BaseModel):
         address: List[str]
 
@@ -71,26 +60,15 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
         address: str
         publish: List[Dict[str,str]]=None
         subscribe: List[Dict[str,str]]=None
+        service: List[Dict[str,str]]=None
+        action: List[Dict[str,str]]=None
 
-
-    # class ROSRESTRuleDetail(BaseModel):
-    #     content_type: str
-    #     topics: Dict[str,str]
-    #     mapping: List[Dict[str,str]]
-
-    # class ROSRESTRule(BaseModel):
-    #     service_name: str
-    #     service_uri: str
-    #     service_method : str
-    #     request_rule: ROSRESTRuleDetail
-    #     response_rule: ROSRESTRuleDetail
     class ROSRESTRule(BaseModel):
         service_name: str
         service_uri: str
         service_method : str
         request_rule: Dict[str,Any]
-        response_rule: Dict[str,Any]        
-
+        response_rule: Dict[str,Any]
 
     class ROSRESTStopRule(BaseModel):
         id: str
@@ -120,6 +98,8 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
         await agent.close()
         print("Server stopped OK")
 
+## Agent Information API        
+
     @app.get('/topic',
         summary="Get topic lists being published ",
         description="request to get topic lists being distributed ",
@@ -137,6 +117,25 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
         global agent
         topic_list = agent.api_get_topic_list()
         return topic_list 
+
+
+    @app.get('/gateway',
+        summary="Get gateway lists",
+        description="request to get gateway lists to be configured to connect ",
+        responses={
+            200: {"description": "gateway lists to connect",
+                "content": {
+                    "application/json": {
+                        "example": ["ws://localhost:2020","ws://localhost:3030"]
+                    },
+                },
+            },
+        },
+    )
+    async def get_gateway_list():
+        global agent
+        gw_list = agent.api_get_gw_list()
+        return gw_list
 
     @app.post('/gateway/get/config',
         summary="Get gateway configs",
@@ -221,7 +220,8 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
         global agent
         results = agent.api_remove_gateways(rule.address)
         return results
-    
+
+### Topic Publish
 
     @app.post('/gateway/publisher/add',
         summary="Add publish rule to the gateway",
@@ -250,52 +250,6 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
         global agent
         results = agent.api_publisher_add(rule.address, rule.publish)
         return results
-
-    @app.post('/gateway/subscriber/add',
-        summary="Add subscribe rule to the gateway",
-        description="request to add subscribe rules to the gateway ",    
-        responses={
-            200: {"description": "operation success",
-                "content": {
-                    "application/json": {
-                        "example" : "ok" 
-                    },
-                },
-            },
-        },     
-    )
-    async def subscriber_add(
-        rule: GatewayRule = Body(
-            ...,
-            example= {
-                'address' : 'ws://localhost:9001',
-                'subscribe' : [
-                    {"name":"/chatter", "messageType":"std_msgs/msg/String", "israw": False}                    
-                ],
-            },
-        ),
-    ):
-        global agent
-        results = agent.api_subscriber_add(rule.address, rule.subscribe)
-        return {"result": results}
-
-    @app.get('/gateway',
-        summary="Get gateway lists",
-        description="request to get gateway lists to be configured to connect ",
-        responses={
-            200: {"description": "gateway lists to connect",
-                "content": {
-                    "application/json": {
-                        "example": ["ws://localhost:2020","ws://localhost:3030"]
-                    },
-                },
-            },
-        },
-    )
-    async def get_gateway_list():
-        global agent
-        gw_list = agent.api_get_gw_list()
-        return gw_list
 
     @app.put('/gateway/publisher/remove',
         summary="Remove Forwarding(publish) from gateway",
@@ -333,7 +287,38 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
         results = agent.api_publisher_remove(rule.address, rule.publish)
         if results != "ok":
             return JSONResponse(status_code=404, content=results)
-        return results
+        return results        
+
+### Topic Subscribe        
+
+    @app.post('/gateway/subscriber/add',
+        summary="Add subscribe rule to the gateway",
+        description="request to add subscribe rules to the gateway ",    
+        responses={
+            200: {"description": "operation success",
+                "content": {
+                    "application/json": {
+                        "example" : "ok" 
+                    },
+                },
+            },
+        },     
+    )
+    async def subscriber_add(
+        rule: GatewayRule = Body(
+            ...,
+            example= {
+                'address' : 'ws://localhost:9001',
+                'subscribe' : [
+                    {"name":"/chatter", "messageType":"std_msgs/msg/String", "israw": False}                    
+                ],
+            },
+        ),
+    ):
+        global agent
+        results = agent.api_subscriber_add(rule.address, rule.subscribe)
+        return {"result": results}
+
 
     @app.put('/gateway/subscriber/remove',
         summary="Remove subscriptions from gateway",
@@ -371,6 +356,134 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
         results = agent.api_subscriber_remove(rule.address, rule.subscribe)
         return {"result": results} 
 
+
+#### ROS SRV
+    @app.post('/gateway/service/expose',
+        summary="Add expose service rule to the gateway",
+        description="request to add expose service rules to the gateway ",    
+        responses={
+            200: {"description": "operation success",
+                "content": {
+                    "application/json": {
+                        "example" : "ok" 
+                    },
+                },
+            },
+        },     
+    )
+    async def service_expose(
+        rule: GatewayRule = Body(
+            ...,
+            example= {
+                'address' : 'ws://localhost:9001',
+                'service' : [
+                    {"service":"add_two_ints", "serviceType":"srv_tester_if.srv.AddTwoInts", "israw": False}                    
+                ],
+            },
+        ),
+    ):
+        global agent
+        results = agent.api_service_expose(rule.address, rule.service)
+        return {"result": results}      
+
+    @app.put('/gateway/service/hide',
+        summary="Hide exposed service from remote gateway",
+        description="request to hide exposed service to the gateway",
+        responses={
+            404: {"description": "The requested gateway was not found", 
+                "content": {
+                    "application/json" : {
+                        "example" : "unknown gateway address" 
+                    },
+                },
+            },            
+            200: {"description": "Success",
+                "content": {
+                    "application/json" : {
+                        "example" : "ok" 
+                    },
+                },
+            },
+        },     
+    )
+    async def service_hide(
+        rule: GatewayRule = Body(
+            ...,
+            example= {
+                'address' : 'ws://localhost:9001',
+                'service' : [
+                    {"service":"add_two_ints", "serviceType":"srv_tester_if.srv.AddTwoInts"}                    
+                ],
+            },           
+        ),
+    ):
+        global agent
+        results = agent.api_service_hide(rule.address, rule.service)
+        return {"result": results}           
+
+#### ROS ACTION
+    @app.post('/gateway/action/expose',
+        summary="Add expose action rule to the gateway",
+        description="request to add expose action rules to the gateway ",    
+        responses={
+            200: {"description": "operation success",
+                "content": {
+                    "application/json": {
+                        "example" : "ok" 
+                    },
+                },
+            },
+        },     
+    )
+    async def action_expose(
+        rule: GatewayRule = Body(
+            ...,
+            example= {
+                'address' : 'ws://localhost:9001',
+                'action' : [
+                    {"action":"fibonacci", "actionType":"action_tester_if.action.Fibonacci", "israw": False}                    
+                ],
+            },
+        ),
+    ):
+        global agent
+        results = agent.api_action_expose(rule.address, rule.action)
+        return {"result": results}      
+
+    @app.put('/gateway/action/hide',
+        summary="Hide exposed action from remote gateway",
+        description="request to hide exposed action to the gateway",
+        responses={
+            404: {"description": "The requested gateway was not found", 
+                "content": {
+                    "application/json" : {
+                        "example" : "unknown gateway address" 
+                    },
+                },
+            },            
+            200: {"description": "Success",
+                "content": {
+                    "application/json" : {
+                        "example" : "ok" 
+                    },
+                },
+            },
+        },     
+    )
+    async def action_hide(
+        rule: GatewayRule = Body(
+            ...,
+            example= {
+                'address' : 'ws://localhost:9001',
+                'action' : [
+                    {"action":"fibonacci", "actionType":"action_tester_if.action.Fibonacci"}                    
+                ],
+            },           
+        ),
+    ):
+        global agent
+        results = agent.api_action_hide(rule.address, rule.action)
+        return {"result": results} 
 
 ############  ros-rest
 ############
@@ -541,7 +654,7 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
         await agent.serve(websocket)
 
     if __name__ == '__main__':
-        uvicorn.run(app, host="0.0.0.0", port=9000, log_level="info")
+        uvicorn.run(app, host="0.0.0.0", port=options.port, log_level="info")
 #        uvicorn.run(app, host="0.0.0.0", port=9000, log_level="trace")
 #        uvicorn.run(app, host="0.0.0.0", port=9000, log_level="debug")
 #        uvicorn.run("rosextpy.app.ros_gateway_service:app", host="0.0.0.0", port=9000, log_level="debug")

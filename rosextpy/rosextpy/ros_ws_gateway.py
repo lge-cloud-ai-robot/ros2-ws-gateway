@@ -131,6 +131,8 @@ class RosWsGateway():
         self._batch_task = None
         self._adv_services : Dict[str, Dict[str,Any]] = {}
         self._adv_action_servers : Dict[str, Dict[str,Any]] = {}
+        self.exposed_services: Dict[str,str] = {}
+        self.exposed_actions: Dict[str,str] = {}
 
     async def send(self, data, israw=False):
         mlogger.debug("send %s", type(data))        
@@ -825,7 +827,39 @@ class RosWsGateway():
                     except RosWsGatewayException as err:
                         mlogger.debug("unsub exception '%s'", err)
                         pass
+                elif item_tuple[0] == 'expsrv': # expose service to remote gateway
+                    self.id_counter += 1
+                    reqid = ''.join(
+                        ['exposesrv:', str(self.bridge_id), ':', str(self.id_counter)])
+                    data = {'op' : 'advertise_service', 'id': reqid, 
+                                'type' : item_tuple[2], 'service': item_tuple[1]}
+                    self.exposed_services[item_tuple[1]] = item_tuple[2]
+                    await self.send(data)
 
+                elif item_tuple[0] == 'delsrv': # hide exposed service to remote gateway
+                    self.id_counter += 1
+                    reqid = ''.join(
+                        ['delsrv:', str(self.bridge_id), ':', str(self.id_counter)])
+                    data = {'op' : 'unadvertise_service', 'id': reqid, 
+                                'service': item_tuple[1]}                    
+                    await self.send(data)
+                    self.exposed_services.pop(item_tuple[1], None)                    
+                elif item_tuple[0] == 'expact': # expose action to remote gateway
+                    self.id_counter += 1
+                    reqid = ''.join(
+                        ['exposeact:', str(self.bridge_id), ':', str(self.id_counter)])
+                    data = {'op' : 'advertise_action', 'id': reqid, 
+                                'type' : item_tuple[2], 'action': item_tuple[1]}
+                    self.exposed_actions[item_tuple[1]] = item_tuple[2]
+                    await self.send(data)
+                elif item_tuple[0] == 'delact': # hide exposed action to remote gateway
+                    self.id_counter += 1
+                    reqid = ''.join(
+                        ['delact:', str(self.bridge_id), ':', str(self.id_counter)])
+                    data = {'op' : 'unadvertise_action', 'id': reqid, 
+                                'action': item_tuple[1]}                    
+                    await self.send(data)
+                    self.exposed_actions.pop(item_tuple[1], None)
                 else:
                     mlogger.error("Unknwon command %s", item_tuple[0])
             except Exception as err:
@@ -873,6 +907,30 @@ class RosWsGateway():
         mlogger.debug("add_subscribe")        
         asyncio.run_coroutine_threadsafe(self.batch_queue.put(
             ('sub', topic_name, topic_type, israw)), self.loop)
+
+    def expose_service(self, srv_name, srv_type, israw=False):
+        """ expose_service """
+        mlogger.debug("expose_service")                
+        asyncio.run_coroutine_threadsafe(self.batch_queue.put(
+            ('expsrv', srv_name, srv_type, israw)), self.loop)
+
+    def hide_service(self, srv_name, israw=False):
+        """ hide_service """
+        mlogger.debug("hide_service")        
+        asyncio.run_coroutine_threadsafe(self.batch_queue.put(
+            ('delsrv', srv_name, "", israw)), self.loop)
+
+    def expose_action(self, act_name, act_type, israw=False):
+        """ expose_action """
+        mlogger.debug("expose_action")        
+        asyncio.run_coroutine_threadsafe(self.batch_queue.put(
+            ('expact', act_name, act_type, israw)), self.loop)
+
+    def hide_action(self, act_name, israw=False):
+        """ hide_action """
+        mlogger.debug("hide_action")        
+        asyncio.run_coroutine_threadsafe(self.batch_queue.put(
+            ('delact', act_name, "", israw)), self.loop)                          
 
     def get_publihsed_topics(self) -> List[str]:
         """ get publihsed topic list

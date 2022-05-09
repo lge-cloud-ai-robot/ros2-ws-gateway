@@ -72,6 +72,18 @@ def OnRequestSubscribeCallbck(topicName, topicTypeStr, israw):
 def OnRequestUnsubscribeCallbck(topicName):
     pass
 
+def OnRequestExposeServiceCallbck(srvName, srvTypeStr, israw):
+    pass
+
+def OnRequestHideServiceCallbck(srvName):
+    pass
+
+def OnRequestExposeActionCallbck(actionName, actionTypeStr, israw):
+    pass
+
+def OnRequestHideActionCallbck(actionName):
+    pass
+
 class WebSocketClientInterface:
     def __init__(self, websocket):
         self.websocket = websocket            
@@ -174,7 +186,12 @@ class RosWsGatewayClient:
         self._req_advertise_handlers: List[OnRequestAdvertiseCallbck] = []
         self._req_unadvertise_handlers: List[OnRequestUnadvertiseCallbck] = []
         self._req_subscribe_handlers: List[OnRequestSubscribeCallbck] = []
-        self._req_unsubscribe_handlers: List[OnRequestUnsubscribeCallbck] = []        
+        self._req_unsubscribe_handlers: List[OnRequestUnsubscribeCallbck] = []       
+
+        self._req_expose_service_handlers : List[OnRequestExposeServiceCallbck] = []
+        self._req_hide_service_handlers: List[OnRequestHideServiceCallbck] = []
+        self._req_expose_action_handlers: List[OnRequestExposeActionCallbck] = []
+        self._req_hide_action_handlers: List[OnRequestHideActionCallbck] = []
 
         # event loop for multi threading event loop
         self.loop = loop if loop is not None else asyncio.get_event_loop()
@@ -246,6 +263,30 @@ class RosWsGatewayClient:
         if self.gateway:
             self.gateway.remove_subscribe(topic_name)
         self.on_handler_event(self._req_unsubscribe_handlers, topic_name)
+
+    def expose_service(self, srv_name, srv_type, israw=False):
+        mlogger.debug("expose_service %s:%s:%s",srv_name, srv_type, israw)
+        if self.gateway:            
+            self.gateway.expose_service(srv_name, srv_type, israw)
+        self.on_handler_event(self._req_expose_service_handlers, srv_name, srv_type, israw)        
+
+    def hide_service(self, srv_name):
+        mlogger.debug("hide_service %s",srv_name)        
+        if self.gateway:
+            self.gateway.hide_service(srv_name)
+        self.on_handler_event(self._req_hide_service_handlers, srv_name)
+
+    def expose_action(self, act_name, act_type, israw=False):
+        mlogger.debug("expose_action %s:%s:%s",act_name, act_type, israw)
+        if self.gateway:            
+            self.gateway.expose_action(act_name, act_type, israw)
+        self.on_handler_event(self._req_expose_action_handlers, act_name, act_type, israw)        
+
+    def hide_action(self, act_name):
+        mlogger.debug("hide_action %s",act_name)        
+        if self.gateway:
+            self.gateway.hide_action(act_name)
+        self.on_handler_event(self._req_hide_action_handlers, act_name)
 
     async def __connect__(self):
         try:
