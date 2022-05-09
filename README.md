@@ -130,7 +130,7 @@ An example JSON request is as follows :
   ]
 }
 ```
-* address - the target gateway address to allow to receive the ROS action request
+* address -the target gateway address to be allowed for the ROS action request
 * action - an array of the action configuration to be exposed to the target
 * action.action - the action name to be exposed to the target
 * action.actionType - the action type to be exposed to the target
