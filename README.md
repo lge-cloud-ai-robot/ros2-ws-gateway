@@ -1,7 +1,6 @@
 # ROS2-WS-GATEWAY
 
-ros-ws-gateway is a software agent to connect ROS components and others(REST, different subnet, etc.). 
-It is inspired by ros2-web-bridge [ros2-web-bridge](https://github.com/RobotWebTools/ros2-web-bridge)
+ros-ws-gateway is a software agent to connect ROS components and others(REST, different subnet, etc.). It is inspired by [ros2-web-bridge](https://github.com/RobotWebTools/ros2-web-bridge)
 
 ## Features
 
