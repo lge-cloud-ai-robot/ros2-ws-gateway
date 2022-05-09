@@ -104,7 +104,7 @@ An example JSON request is as follows :
   ]
 }
 ```
-* address - the target gateway address to allow to receive the ROS service request
+* address - the target gateway address to be allowed for the ROS service request
 * service - an array of the service configuration to be exposed to the target
 * service.service - the service name to be exposed to the target
 * service.serviceType - the service type to be exposed to the target
