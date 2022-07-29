@@ -721,11 +721,11 @@ class RosWsGateway():
 
 
     def _ros_send_srvcli_response_callback(self, srv_name, call_id, res_mesg):# node_manager needs sync callback
-        mlogger.debug("_ros_send_srvcli_response_callback ")                
+        mlogger.debug("_ros_send_srvcli_response_callback ")
         response = {"op": "service_response", 
                     "service": srv_name,
-                    "value" : res_mesg,
                     "id": call_id,
+                    "values" : res_mesg,                    
                     "result": True }
 
         if isinstance(res_mesg, bytes):

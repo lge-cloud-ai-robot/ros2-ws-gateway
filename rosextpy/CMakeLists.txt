@@ -142,6 +142,16 @@ install(TARGETS rosextpy_common
   RUNTIME DESTINATION bin
 )
 
+install(PROGRAMS 
+  scripts/run_gateway
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(FILES
+  launch/gateway_launch.xml
+  DESTINATION share/${PROJECT_NAME}/launch
+)
+
 pybind11_add_module(_rosextpy_pybind11 SHARED
   src/rosextpy.cpp
 )

@@ -286,6 +286,7 @@ class SrvClientManager:
     def _when_finished(self, fut : Future, call_id, response_callback):
         mlogger.debug("_when_finished")
         response = fut.result()        
+
         response_callback(self.srv_name, call_id, response)
     
     def encode_json_to_request(self, json_data):
@@ -513,6 +514,7 @@ class NodeManager(Thread):
         self.srv_clients = {}
         self.act_servers = {}
         self.act_clients = {}
+        self.srv_name_and_types = {}
         mlogger.debug("ros node manager created")        
 
     def run(self):
@@ -605,22 +607,38 @@ class NodeManager(Thread):
         srv_mgr.add_srv_service(bridge_id, callback) 
         return srv_mgr
 
+    def get_service_type(self, srv_name):
+        mlogger.debug("get_service_type %s", srv_name)
+        srvtype = self.srv_name_and_types.get(srv_name)        
+        if not srvtype:            
+            srvinfos = self.node.get_service_names_and_types()            
+            for info in list(srvinfos):
+                self.srv_name_and_types[info[0]] = info[1][0]
+                if srv_name == info[0]:                    
+                    srvtype = info[1][0]
+        return srvtype
 
-    def create_srv_client(self, srv_type, srv_name, bridge_id):
-        mlogger.debug("create_srv_client %s :%s :%s", srv_type, srv_name, bridge_id)        
+
+    def create_srv_client(self, srv_type, srv_name, bridge_id):        
+        mlogger.debug("create_srv_client %s :%s :%s", srv_type, srv_name, bridge_id)
+
         cli_mgr = self.srv_clients.get(srv_name)
         if not cli_mgr:
             try:
+                srv_type = self.get_service_type(srv_name)      
+                if not srv_type:
+                    raise NodeManagerException(
+                    "The srv {topic} doest not serve ".format(topic=srv_name))
                 cli_mgr = SrvClientManager(self.node, srv_type, srv_name)
                 self.srv_clients[srv_name] = cli_mgr
             except Exception:
                 mlogger.debug(traceback.format_exc())
                 raise
-        else:
-            if srv_type != cli_mgr.srv_type:
-                raise NodeManagerException(
-                    "The srv {topic} already exists with d different srv type {type}".format(
-                        topic=srv_name, type=cli_mgr.srv_type))
+        # else:  # do not use.. because srv_type argument can be null
+            # if srv_type != cli_mgr.srv_type:
+            #     raise NodeManagerException(
+            #         "The srv {topic} already exists with d different srv type {type}".format(
+            #             topic=srv_name, type=cli_mgr.srv_type))
 
         cli_mgr.add_srv_client(bridge_id)                
         return cli_mgr

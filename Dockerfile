@@ -27,4 +27,4 @@ COPY --from=builder /home/user/works/dist/install ./
 COPY --from=builder /home/user/works/dist/requirements.txt ./
 RUN pip install -r requirements.txt
 ENTRYPOINT \
-    /bin/bash -c 'source ./setup.bash; python -m rosextpy.app.ros_gateway_service'
+    /bin/bash -c 'source ./setup.bash; ros2 launch rosextpy gateway_launch.xml'
