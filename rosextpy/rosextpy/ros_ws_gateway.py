@@ -596,11 +596,19 @@ class RosWsGateway():
                     "result": True }       
 
         if isinstance(feedback_data, bytes):
-            if self.raw_type == 'js-buffer':
+            if compression == 'js-buffer':
                 response['value'] = bytesToJSBuffer(feedback_data)
                 israw = False
-            else:
+            elif compression=='cbor-raw':
+                (secs, nsecs) = self.node_manager.get_node().get_clock().now().seconds_nanoseconds()
+                response["value"] = {
+                "secs": secs,
+                "nsecs": nsecs,
+                "bytes": feedback_data,
+                }
                 israw = True
+            else:
+                israw = True                
         else:
             israw = False
 
@@ -615,9 +623,17 @@ class RosWsGateway():
                     "result": True }
 
         if isinstance(result_data, bytes):
-            if self.raw_type == 'js-buffer':
+            if compression == 'js-buffer':
                 response['value'] = bytesToJSBuffer(result_data)
                 israw = False
+            elif compression=='cbor-raw':
+                (secs, nsecs) = self.node_manager.get_node().get_clock().now().seconds_nanoseconds()
+                response["value"] = {
+                "secs": secs,
+                "nsecs": nsecs,
+                "bytes": result_data,
+                }
+                israw = True
             else:
                 israw = True
         else:
@@ -635,16 +651,7 @@ class RosWsGateway():
 
         # print("RESULT IS ", response)
 
-        # if isinstance(result_data, bytes):
-        #     if self.raw_type == 'js-buffer':
-        #         response['value'] = bytesToJSBuffer(result_data)
-        #         israw = False
-        #     else:
-        #         israw = True
-        # else:
-        #     israw = False
 
-        # asyncio.run_coroutine_threadsafe( self.send(response, israw), self.loop)
 
     def _ros_send_actcli_reject_callback(self, act_name, call_id, goal_handle):
         mlogger.debug("_ros_send_actcli_reject_callback ")
@@ -656,16 +663,6 @@ class RosWsGateway():
 
         # print("RESULT IS ", response)
 
-        # if isinstance(result_data, bytes):
-        #     if self.raw_type == 'js-buffer':
-        #         response['value'] = bytesToJSBuffer(result_data)
-        #         israw = False
-        #     else:
-        #         israw = True
-        # else:
-        #     israw = False
-
-        # asyncio.run_coroutine_threadsafe( self.send(response, israw), self.loop)
 
     async def _ros_action_proxy_callback(self, action_name, action_type, goal_handle):
         mlogger.debug("_ros_action_proxy_callback")
@@ -721,8 +718,6 @@ class RosWsGateway():
         else:            
             mlogger.debug("The service [%s] was not advertised", srv_name)  
             raise ROSServiceFailException(srv_name)
-
-
 
     def _ros_send_srvcli_response_callback(self, srv_name, call_id, compression, res_mesg):# node_manager needs sync callback
         mlogger.debug("_ros_send_srvcli_response_callback ")
