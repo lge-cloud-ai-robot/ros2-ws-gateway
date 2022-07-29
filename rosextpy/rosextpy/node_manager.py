@@ -94,13 +94,13 @@ class ActionClientManager:
 
     def __get_result_callback(self, future, action_result_callback, call_id):
         mlogger.debug("__get_result_callback ")
-        action_result_callback(self.act_name, call_id, future.result().result)
+        action_result_callback['callback'](self.act_name, call_id, callback_info['compression'], future.result().result)
 
     # it will be called by gateway
     # 
     # feedback_callback = (action_name, call_id, feedback_msg)
     # action_result_callback(action_name, call_id, result_data)
-    def __call_goal_async(self, goal_msg, call_id, feedback_callback, action_result_callback,goal_accept_callback, goal_reject_callback):
+    def __call_goal_async(self, goal_msg, call_id, feedback_callback, action_result_callback, goal_accept_callback, goal_reject_callback):
         mlogger.debug("__call_goal_async ")
         def goal_response_callback(future):
             goal_handle = future.result()
@@ -111,7 +111,7 @@ class ActionClientManager:
                 if action_result_callback is not None:
                     _get_result_future = goal_handle.get_result_async()
                     _get_result_future.add_done_callback(functools.partial(self.__get_result_callback, 
-                                action_result_callback=action_result_callback,call_id=call_id
+                                action_result_callback=action_result_callback, call_id=call_id
                                 ))
                 
             else:
@@ -129,6 +129,7 @@ class ActionClientManager:
 
         if _send_goal_future is not None:
             _send_goal_future.add_done_callback(goal_response_callback)
+
 
         return _send_goal_future
 
@@ -168,7 +169,7 @@ class ActionClientManager:
         return the_future
 
     def add_action_client(self, bridge_id):
-        """add_subscription"""
+        """add_action_client"""
         self.bridge_id = bridge_id        
 
     def remove_action_client(self, bridge_id):
@@ -239,7 +240,7 @@ class ActionServerManager:
 
 
     def add_action_server(self, bridge_id, callback):
-        """add_subscription"""
+        """add_action_server"""
         self.bridge_id = bridge_id
         self.exec_callback = callback
 
@@ -283,11 +284,10 @@ class SrvClientManager:
         mlogger.debug("node create_client completed")
         self.bridges = {}
 
-    def _when_finished(self, fut : Future, call_id, response_callback):
+    def _when_finished(self, fut : Future, call_id, callback_info):
         mlogger.debug("_when_finished")
-        response = fut.result()        
-
-        response_callback(self.srv_name, call_id, response)
+        response = fut.result()
+        callback_info['callback'](self.srv_name, call_id, callback_info['compression'], response)
     
     def encode_json_to_request(self, json_data):
         """remove_publish"""
@@ -299,7 +299,7 @@ class SrvClientManager:
     
     # it will be called by gateway
     # response_callback--> receive ROS response and send JSON message response
-    def call_service_async(self, request_json, call_id, response_callback):
+    def call_service_async(self, request_json, call_id, callback_info):
         """publish"""
         mlogger.debug("service_call %s",request_json)
 
@@ -321,14 +321,13 @@ class SrvClientManager:
             else:
                 # cmdData['msg'] will be json or {"type":"Buffer","data"}"
                 the_future = self.handle.call_async(self.encode_json_to_request(request_json))
-
         the_future.add_done_callback(functools.partial( self._when_finished, call_id=call_id, 
-                        response_callback=response_callback))
+                        callback_info=callback_info))
 
         return the_future
 
     def add_srv_client(self, bridge_id):
-        """add_subscription"""
+        """add_srv_client"""
         self.bridge_id = bridge_id        
 
     def remove_srv_client(self, bridge_id):
@@ -371,7 +370,7 @@ class SrvServiceManager:
         return fut
 
     def add_srv_service(self, bridge_id, callback):
-        """add_subscription"""
+        """add_srv_service"""
         self.bridge_id = bridge_id
         self.callback = callback
 
@@ -410,13 +409,12 @@ class SubscriptionManager:
 
     def _inter_callback(self, message):
         mlogger.debug('mesage received!!! %s', type(message))
+        for callback_info in list(self.callbacks.values()):
+            callback_info['callback'](self.topic_name, callback_info['compression'], message)
 
-        for callback in list(self.callbacks.values()):
-            callback(self.topic_name, message)        
-
-    def add_subscription(self, bridge_id, callback):
+    def add_subscription(self, bridge_id, callbackinfo):
         """add_subscription"""
-        self.callbacks[bridge_id] = callback
+        self.callbacks[bridge_id] = callbackinfo
 
     def remove_subscription(self, bridge_id):
         """remove_subscription"""
@@ -515,6 +513,7 @@ class NodeManager(Thread):
         self.act_servers = {}
         self.act_clients = {}
         self.srv_name_and_types = {}
+        self.topic_name_and_types = {}
         mlogger.debug("ros node manager created")        
 
     def run(self):
@@ -618,6 +617,17 @@ class NodeManager(Thread):
                     srvtype = info[1][0]
         return srvtype
 
+    def get_topic_type(self, type_name):
+        mlogger.debug("get_topic_type %s", type_name)
+        topictype = self.topic_name_and_types.get(type_name)  
+        if not topictype:            
+            topictypes = self.node.get_topic_names_and_types()            
+            for info in list(topictypes):
+                self.topic_name_and_types[info[0]] = info[1][0]
+                if type_name == info[0]:                    
+                    topictype = info[1][0]
+        return topictype        
+
 
     def create_srv_client(self, srv_type, srv_name, bridge_id):        
         mlogger.debug("create_srv_client %s :%s :%s", srv_type, srv_name, bridge_id)
@@ -643,18 +653,23 @@ class NodeManager(Thread):
         cli_mgr.add_srv_client(bridge_id)                
         return cli_mgr
         
-    def create_subscription(self, topic_type, topic_name, bridge_id, callback, queue_length=0, israw=False):    
+    def create_subscription(self, topic_type, topic_name, bridge_id, callbackinfo, queue_length=0, israw=False):    
         """create_subscription"""
         mlogger.debug("create_subscription %s :%s :%s", topic_type, topic_name, bridge_id)        
         sub_mgr = self.subscriptions.get(topic_name)  # needs split raw and not raw
         if not sub_mgr:
             try :
+                if not topic_type:
+                    topic_type = self.get_topic_type(topic_name)
+                    if not topic_type:
+                        raise NodeManagerException(
+                            "The topic {topic} is not published ".format(topic=topic_name))                
                 sub_mgr = SubscriptionManager(self.node, topic_type, topic_name, queue_length, israw)                
                 self.subscriptions[topic_name] = sub_mgr
             except Exception:
                 mlogger.debug(traceback.format_exc())
                 raise
-        sub_mgr.add_subscription(bridge_id, callback)
+        sub_mgr.add_subscription(bridge_id, callbackinfo)
         return sub_mgr
 
     def create_publisher(self, topic_type, topic_name, bridge_id,  queue_length=10, israw=False):

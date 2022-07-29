@@ -332,15 +332,19 @@ class RosWsGateway():
         mlogger.debug("_op_subscribe %s", cmd_data)        
         try:
             topic_name = cmd_data['topic']
-            topic_type = cmd_data['type']
-            self.subscribed_topic[topic_name] = topic_type
+            topic_type = cmd_data.get('type', None) # In new Bridge Protocol , it is option            
             queue_length = cmd_data.get('queue_length', 0)
             compression = cmd_data.get('compression', 'none')
             israw = False if compression=='none' else True            
             if self.node_manager:
+                if not topic_type:
+                    topic_type = self.node_manager.get_topic_type(topic_name)
+                self.subscribed_topic[topic_name] = topic_type                
                 self.node_manager.create_subscription(
-                    topic_type, topic_name, self.bridge_id, self._ros_send_subscription_callback, 
+                    topic_type, topic_name, self.bridge_id, 
+                    {'callback': self._ros_send_subscription_callback, 'compression' : compression}, 
                     queue_length = queue_length, israw = israw)
+                    # queue_length = queue_length, israw = israw)
         except Exception:
             mlogger.error(traceback.format_exc())       
 
@@ -370,22 +374,21 @@ class RosWsGateway():
     #           type: service type
     #           args:  service parameters
     #         ]
-    #
 
     async def _op_call_service(self, cmd_data):
         mlogger.debug("_op_call_service  %s", cmd_data)        
         try:
             service_name = cmd_data['service']
-            type_name = cmd_data['type']
-            args = cmd_data['args']
-            call_id=cmd_data['id']
+            service_type = cmd_data.get('type', None) # In new Bridge Protocol , it is option
+            args = cmd_data.get('args', None)
+            callid = cmd_data.get('id', None)
+            compression = cmd_data.get('compression','none')
             if self.node_manager:
                 srv_cli = self.node_manager.create_srv_client(
-                    type_name, service_name, self.bridge_id)
-
+                    service_type, service_name, self.bridge_id)
                 if srv_cli:
-                    srv_cli.call_service_async(args, call_id,
-                        response_callback=self._ros_send_srvcli_response_callback)
+                    srv_cli.call_service_async(args, callid,
+                        {'callback' : self._ros_send_srvcli_response_callback, 'compression' : compression })
                 else:
                     pass        
         except Exception:
@@ -490,23 +493,24 @@ class RosWsGateway():
             mlogger.error(traceback.format_exc())
         return "OK"
 
+
     async def _op_call_action(self, cmd_data):
         mlogger.debug("_op_call_action  %s", cmd_data)
         try:
             action_name = cmd_data['action']
-            type_name = cmd_data['type']
-            args = cmd_data['args']
-            call_id=cmd_data['id']
+            action_type = cmd_data.get('type', None)
+            args = cmd_data.get('args', None)
+            call_id = cmd_data.get('id', None)
+            compression = cmd_data.get('compression','none')
             if self.node_manager:
                 srv_cli = self.node_manager.create_action_client(
-                    type_name, action_name, self.bridge_id)
-
+                    action_type, action_name, self.bridge_id)
                 if srv_cli:
                     srv_cli.send_goal_async(args, call_id,
-                        feedback_callback=self._ros_send_actcli_feedback_callback,
-                        action_result_callback=self._ros_send_actcli_result_callback,
+                        feedback_callback={'callback' : self._ros_send_actcli_feedback_callback, 'compression' : compression},
+                        action_result_callback={'callback' :self._ros_send_actcli_result_callback,'compression' : compression},
                         goal_accept_callback=self._ros_send_actcli_accept_callback,
-                        goal_reject_callback=self._ros_send_actcli_reject_callback
+                        goal_reject_callback=self._ros_send_actcli_reject_callback,
                         )
                 else:
                     pass        
@@ -720,7 +724,7 @@ class RosWsGateway():
 
 
 
-    def _ros_send_srvcli_response_callback(self, srv_name, call_id, res_mesg):# node_manager needs sync callback
+    def _ros_send_srvcli_response_callback(self, srv_name, call_id, compression, res_mesg):# node_manager needs sync callback
         mlogger.debug("_ros_send_srvcli_response_callback ")
         response = {"op": "service_response", 
                     "service": srv_name,
@@ -729,9 +733,17 @@ class RosWsGateway():
                     "result": True }
 
         if isinstance(res_mesg, bytes):
-            if self.raw_type == 'js-buffer':
+            if compression == 'js-buffer':
                 response['value'] = bytesToJSBuffer(res_mesg)
                 israw = False
+            elif compression=='cbor-raw':
+                (secs, nsecs) = self.node_manager.get_node().get_clock().now().seconds_nanoseconds()
+                response["value"] = {
+                "secs": secs,
+                "nsecs": nsecs,
+                "bytes": res_mesg,
+                }
+                israw = True
             else:
                 israw = True
         else:
@@ -740,13 +752,21 @@ class RosWsGateway():
         asyncio.run_coroutine_threadsafe( self.send(response, israw), self.loop)
         
 
-    def _ros_send_subscription_callback(self, topic_name, mesg):# node_manager needs sync callback
+    def _ros_send_subscription_callback(self, topic_name, compression, mesg):# node_manager needs sync callback
         mlogger.debug("sendSubscription  %s", topic_name)
         response = {"op": "publish", "topic": topic_name, "msg": mesg}
         if isinstance(mesg, bytes):
-            if self.raw_type == 'js-buffer':
+            if compression == 'js-buffer':
                 response['msg'] = bytesToJSBuffer(mesg)
                 israw = False
+            elif compression=='cbor-raw':
+                (secs, nsecs) = self.node_manager.get_node().get_clock().now().seconds_nanoseconds()
+                response["msg"] = {
+                "secs": secs,
+                "nsecs": nsecs,
+                "bytes": mesg,
+                }
+                israw = True
             else:
                 israw = True
         else:

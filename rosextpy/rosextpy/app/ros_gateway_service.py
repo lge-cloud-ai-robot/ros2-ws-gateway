@@ -33,16 +33,16 @@ from typing import List, Dict, Any
 from ..mod_config import WS_CONFIG 
 from rosextpy.ros_gateway_agent import RosWsGatewayAgent
 
-#logging.basicConfig(stream=sys.stdout, format='%(levelname)-6s [%(filename)s:%(lineno)d] %(message)s', level=logging.INFO)
-logging.basicConfig(stream=sys.stdout, format='%(levelname)-6s [%(filename)s:%(lineno)d] %(message)s', level=logging.DEBUG)
+logging.basicConfig(stream=sys.stdout, format='%(levelname)-6s [%(filename)s:%(lineno)d] %(message)s', level=logging.INFO)
+#logging.basicConfig(stream=sys.stdout, format='%(levelname)-6s [%(filename)s:%(lineno)d] %(message)s', level=logging.DEBUG)
 mlogger = logging.getLogger('ros_agent_main')
-mlogger.setLevel(logging.DEBUG)
-logging.getLogger('ros_rpc_gateway_client').setLevel(logging.DEBUG)
-logging.getLogger('ros_gateway_agent').setLevel(logging.DEBUG)
-logging.getLogger('ros_ws_gateway').setLevel(logging.DEBUG)
-logging.getLogger('ros_ws_gateway_client').setLevel(logging.DEBUG)
-logging.getLogger('node_manager').setLevel(logging.DEBUG)
-logging.getLogger('websocket_utils').setLevel(logging.DEBUG)
+# mlogger.setLevel(logging.DEBUG)
+# logging.getLogger('ros_rpc_gateway_client').setLevel(logging.DEBUG)
+# logging.getLogger('ros_gateway_agent').setLevel(logging.DEBUG)
+# logging.getLogger('ros_ws_gateway').setLevel(logging.DEBUG)
+# logging.getLogger('ros_ws_gateway_client').setLevel(logging.DEBUG)
+# logging.getLogger('node_manager').setLevel(logging.DEBUG)
+# logging.getLogger('websocket_utils').setLevel(logging.DEBUG)
    
 if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
     from fastapi import Body, FastAPI, WebSocket, status, BackgroundTasks    
