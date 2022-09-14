@@ -236,6 +236,47 @@ class RosWsGatewayClient:
         if callbacks is not None:
             self._req_unsubscribe_handlers.extend(callbacks)
 
+
+    def register_req_expose_service_handler(self, callbacks: List[OnRequestExposeServiceCallbck] = None):
+        """
+        Register a request expose service handler callback that will be called
+        
+        Args:
+            callbacks (List[function]): callback
+        """
+        if callbacks is not None:
+            self._req_expose_service_handlers.extend(callbacks)        
+
+    def register_req_hide_service_handler(self, callbacks: List[OnRequestHideServiceCallbck] = None):
+        """
+        Register a request hide service handler callback that will be called
+        
+        Args:
+            callbacks (List[function]): callback
+        """
+        if callbacks is not None:
+            self._req_hide_service_handlers.extend(callbacks)
+
+    def register_expose_action_handler(self, callbacks: List[OnRequestExposeActionCallbck] = None):
+        """
+        Register a request expose action handler callback that will be called
+        
+        Args:
+            callbacks (List[function]): callback
+        """
+        if callbacks is not None:
+            self._req_expose_action_handlers.extend(callbacks)
+
+    def register_req_hide_action_handler(self, callbacks: List[OnRequestHideActionCallbck] = None):
+        """
+        Register a request hide action handler callback that will be called
+        
+        Args:
+            callbacks (List[function]): callback
+        """
+        if callbacks is not None:
+            self._req_hide_action_handlers.extend(callbacks)
+
     def on_handler_event(self, handlers, *args, **kwargs):
         for callback in handlers:
             callback(*args, **kwargs)

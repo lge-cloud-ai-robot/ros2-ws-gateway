@@ -28,6 +28,7 @@ from asyncio.tasks import Task
 import logging
 import asyncio
 import threading
+from datetime import datetime
 from typing import List, Dict, Any
 from tenacity import retry, wait
 import tenacity
@@ -49,9 +50,11 @@ from rosextpy.ros_ws_gateway import RosWsGateway
 from rosextpy.ros_rpc_gateway_client import RosRPCGatewayClient
 
 mlogger = logging.getLogger('ros_gateway_agent')
+#mlogger.setLevel(logging.DEBUG)
 
 def logerror(retry_state: tenacity.RetryCallState):    
     mlogger.debug("connection failed finally because %s", retry_state.outcome.exception())
+#    mlogger.debug(traceback.format_exc())
 
 ########################
 ##
@@ -74,6 +77,8 @@ class GatewayTaskLog():
         self.active = active
         self.config['publish'] = []
         self.config['subscribe'] = []
+        self.config['expose-service'] = []
+        self.config['expose-action'] = []
         """
         config (dict): config dict
             ex: {'title' : 'a1', 'active' : True,address': 'ws://129.254.90.138:9090', 
@@ -89,13 +94,12 @@ class GatewayTaskLog():
         """        
 
     def __str__(self):
-        return '("title" : {}, "address" : {}, "active" : {}, "publish" : {}, "subscribe" : {}'.format(
+        return '("title" : {}, "address" : {}, "active" : {}, "publish" : {}, "subscribe" : {}, "expose-service": {}, "expose-action": {}'.format(
             self.config['title'], self.config['address'], self.config['active'],
-            self.config['publish'], self.config['subscribe'])
+            self.config['publish'], self.config['subscribe'], self.config['expose-service'], self.config['expose-action'])
 
     def get_config(self):
         return self.config
-
 
     def _check_pub_topic_exist_(self, topicName):
         if len(self.config['publish'])==0:
@@ -114,6 +118,22 @@ class GatewayTaskLog():
                 return False
         return True
 
+    def _check_service_exist_(self, serviceName):
+        if len(self.config['expose-service'])==0:
+            return False
+        for x in self.config['expose-service']:
+            if x['name'] == serviceName:
+                return False
+        return True
+
+    def _check_action_exist_(self, actionName):
+        if len(self.config['expose-action'])==0:
+            return False
+        for x in self.config['expose-action']:
+            if x['name'] == actionName:
+                return False
+        return True                
+
 
     def on_req_advertise(self,topicName, topicTypeStr, israw):
         mlogger.debug("GatewayTaskLog:on_req_advertise")
@@ -123,17 +143,41 @@ class GatewayTaskLog():
     def on_req_unadvertise(self,topicName):
         mlogger.debug("GatewayTaskLog:on_req_unadvertise")        
         for x in self.config['publish']:
-            self.config['publish'].remove(x)
+            if x['name'] == topicName:
+                self.config['publish'].remove(x)
 
     def on_req_subscribe(self, topicName, topicTypeStr, israw):
         mlogger.debug("GatewayTaskLog:on_req_subscribe")
-        if not self._check_pub_topic_exist_(topicName):
-            self.config['subscribe'].append({'name' : topicName, 'messageType' : topicTypeStr, 'israw' : israw})        
+        if not self._check_sub_topic_exist_(topicName):
+            self.config['subscribe'].append({'name' : topicName, 'messageType' : topicTypeStr, 'israw' : israw})
 
     def on_req_unsubscribe(self, topicName):
         mlogger.debug("GatewayTaskLog:on_req_unsubscribe")
         for x in self.config['subscribe']:
-            self.config['subscribe'].remove(x)
+            if x['name'] == topicName:
+                self.config['subscribe'].remove(x)  
+
+    def on_req_expose_service(self, serviceName, serviceTypeStr, israw):
+        mlogger.debug("GatewayTaskLog:on_req_expose_service")        
+        if not self._check_service_exist_(serviceName):            
+            self.config['expose-service'].append({'service' : serviceName, 'serviceType' : serviceTypeStr, 'israw' : israw})
+
+    def on_req_hide_service(self, serviceName):
+        mlogger.debug("GatewayTaskLog:on_req_hide_service")
+        for x in self.config['expose-service']:
+            if x['service'] == serviceName:
+                self.config['expose-service'].remove(x) 
+
+    def on_req_expose_action(self, actionName, actionTypeStr, israw):
+        mlogger.debug("GatewayTaskLog:on_req_expose_action")
+        if not self._check_action_exist_(actionName):
+            self.config['expose-action'].append({'action' : actionName, 'actionType' : actionTypeStr, 'israw' : israw})
+
+    def on_req_hide_action(self, actionName):
+        mlogger.debug("GatewayTaskLog:on_req_hide_action")        
+        for x in self.config['expose-action']:
+            if x['action'] == actionName:
+                self.config['expose-action'].remove(x) 
 
 
 ######################
@@ -171,8 +215,9 @@ class RosWsGatewayAgent():
         self.rpc_manager = DefaultRPCManager()
         self.endpoint = RosWsGatewayEndpoint(node_manager = self.node_manager)
         self.gw_task_logs : Dict[str, GatewayTaskLog] = {}
-        self.gw_map : Dict[str, RosWsGatewayClient] ={}
+        self.gw_map : Dict[str, RosWsGatewayClient] ={}        
         self.rpc_map: Dict[str, RosRPCGatewayClient] = {}
+        self.gw_config: Dict[str, Dict[str, Dict]] = {}
         self.gw_tasks : Dict[str, Task] = {}
         self.gw_tasks_lock = threading.RLock()     
         self.loop = loop if loop is not None else asyncio.get_event_loop()
@@ -189,7 +234,7 @@ class RosWsGatewayAgent():
     async def _stop_client_tasks(self):
         mlogger.debug("_stop_client_tasks")
         try:
-            for t_task in list(self.gw_tasks.values()):
+            for t_task in list(self.gw_tasks.values()):                
                 t_task.cancel()
         except :
             mlogger.debug(traceback.format_exc())
@@ -201,9 +246,8 @@ class RosWsGatewayAgent():
     async def _on_disconnect(self, gw : RosWsGateway):
         mlogger.debug("_on_disconnect")
 
-    async def _connect(self, uri, config:Dict=None):
+    async def _connect(self, uri):
         mlogger.debug("connect!!!!") 
-
         try :            
             async with RosWsGatewayClient(uri, self.node_manager,
                            on_connect=[self._on_connect],
@@ -211,76 +255,126 @@ class RosWsGatewayAgent():
                                retry_config=False # for Debug, else None
                                ) as client:
                 self.gw_map[uri] = client #  considered to be called from a single thread
-                task_log = self.gw_task_logs.get(uri, None)
-                task_config = config
-
-                if task_log:
-                    task_config = task_log.get_config()
-                    task_log = GatewayTaskLog(uri, task_log.config['title'], True)
-                else:
-                    if task_config:
-                        t_title = config.get('title',uri) # when no specific title, use uri
-                    else:
-                        t_title = uri
-                    task_log = GatewayTaskLog(uri, t_title, True)
+                # task_log = self.gw_task_logs.get(uri, None)
+                task_config_list = self.gw_config.get(uri, None)
+                task_log_title = datetime.now()
+                # if task_log:  # merge task_log with existing config
+                #     task_config = task_log.get_config()
+                #     task_log = GatewayTaskLog(uri, task_log_title, True)
+                
+                task_log = GatewayTaskLog(uri, task_log_title, True)
                 
                 client.register_req_advertise_handler([task_log.on_req_advertise])
                 client.register_req_unadvertise_handler([task_log.on_req_unadvertise])
                 client.register_req_subscribe_handler([task_log.on_req_subscribe])
                 client.register_req_unsubscribe_handler([task_log.on_req_unsubscribe])
+                client.register_req_expose_service_handler([task_log.on_req_expose_service])
+                client.register_req_hide_service_handler([task_log.on_req_hide_service])
+                client.register_expose_action_handler([task_log.on_req_expose_action])
+                client.register_req_hide_action_handler([task_log.on_req_hide_action])
 
                 self.gw_task_logs[uri] = task_log   
-#                print("CONNECT CONFIG", config)             
-#                print("CONNECT TASSK CONFIG", task_config)
+#                print("CONNECT CONFIG", uri)             
+#                print("CONNECT LOGS", self.gw_task_logs)             
+#                print("CONNECT TASSK CONFIG", task_config_list)
 
-                if task_config:
-                    if 'publish' in task_config:                        
-                        for pub in task_config['publish']:                                                        
-                            israw = pub.get('israw', False)
-                            client.add_publish( pub['name'], pub['messageType'], israw)
-                    if 'subscribe' in task_config:
-                        for sub in task_config['subscribe']:                            
-                            israw =sub.get('israw', False)
-                            client.add_subscribe( sub['name'], sub['messageType'], israw)
-                    if 'expose-service' in task_config:
-                        for rule in task_config['expose-service']:                            
-                            israw =rule.get('israw', False)
-                            client.expose_service( rule['service'], rule['serviceType'], israw)
-                    if 'expose-action' in task_config:
-                        for rule in task_config['expose-action']:                            
-                            israw =rule.get('israw', False)
-                            client.expose_action( rule['action'], rule['actionType'], israw)
+                if task_config_list:                    
+                    # for each config title
+                    for task_config in list(task_config_list.values()):
+                        if 'publish' in task_config:                        
+                            for rule in task_config['publish']:                                                        
+                                israw = rule.get('israw', False)
+                                if rule.get('name',None) and rule.get('messageType', None):
+                                    client.add_publish( rule['name'], rule['messageType'], israw)
+                        if 'subscribe' in task_config:
+                            for rule in task_config['subscribe']:                            
+                                israw =rule.get('israw', False)
+                                if rule.get('name',None) and rule.get('messageType', None):
+                                    client.add_subscribe( rule['name'], rule['messageType'], israw)
+                        if 'expose-service' in task_config:
+                            for rule in task_config['expose-service']:                            
+                                israw =rule.get('israw', False)
+                                if rule.get('service',None) and rule.get('serviceType', None):
+                                    client.expose_service( rule['service'], rule['serviceType'], israw)
+                        if 'expose-action' in task_config:
+                            for rule in task_config['expose-action']:                            
+                                israw =rule.get('israw', False)
+                                if rule.get('action',None) and rule.get('actionType', None):
+                                    client.expose_action( rule['action'], rule['actionType'], israw)
                 await client.wait_on_reader()                
         except Exception as ex:
             # some error will be forwarded to retry connection
             mlogger.debug(traceback.format_exc())
             raise
-        finally:
+        finally:            
             self.gw_map.pop(uri, None)
 
-    async def _keep_connect(self, uri, config:Dict=None):
+    async def _keep_connect(self, uri):
         mlogger.debug("_keep_connect: ")
         try:
             # TODO: config:Dict에서 retry_config 수정값을 받아서, self.retry_config에 적용 필요
             #  critical system인 경우 retry 시도후, 복구가 안되면 모니터로 알릴 필요 있음. 
             # critical 하지 않다면 retry 시도후, 일정 조건이면 상태 기록만 남겨야함.
             # 상태 유지/관리를 위한 DB 부분과, 해당 상태 도달을 위한 에이전트 분리 필요 -K8S 개념 활용
-            await retry(**self.retry_config)(self._connect)(uri, config)
+            await retry(**self.retry_config)(self._connect)(uri)
         except Exception:
             mlogger.debug(traceback.format_exc())
 
+
+    def _add_gateway_task(self, uri, config:Dict=None):
+        """add gateway task [thread safe]
+        """
+        mlogger.debug("_add_gateway_task: ")
+        with self.gw_tasks_lock:                
+                if self.gw_config.get(uri, None) == None:
+                    self.gw_config[uri] = {}                                    
+
+                if config.get('title',None) != None:
+                    t_title = config['title']
+                else:
+                    t_title = uri
+
+                if self.gw_config[uri].get(t_title,None)==None:
+                    self.gw_config[uri][t_title] = {}
+
+                if config.get('active',None) != None:
+                    self.gw_config[uri][t_title]['active'] = config['active']
+                else:
+                    self.gw_config[uri][t_title]['active'] = True
+
+                if 'publish' in config:
+                    if self.gw_config[uri][t_title].get('publish', None)==None:
+                        self.gw_config[uri][t_title]['publish'] = []                    
+                    self.gw_config[uri][t_title]['publish'].extend(config['publish'])
+
+                if 'subscribe' in config:
+                    if self.gw_config[uri][t_title].get('subscribe', None)==None:
+                        self.gw_config[uri][t_title]['subscribe'] = []                    
+                    self.gw_config[uri][t_title]['subscribe'].extend(config['subscribe'])                    
+
+                if 'expose-service' in config:
+                    if self.gw_config[uri][t_title].get('expose-service', None)==None:
+                        self.gw_config[uri][t_title]['expose-service'] = []                    
+                    self.gw_config[uri][t_title]['expose-service'].extend(config['expose-service'])   
+
+                if 'expose-action' in config:
+                    if self.gw_config[uri][t_title].get('expose-action', None)==None:
+                        self.gw_config[uri][t_title]['expose-action'] = []                    
+                    self.gw_config[uri][t_title]['expose-action'].extend(config['expose-action'])                                           
 
     def _run_gateway_task(self, uri, config:Dict=None):
         """run gateway task [thread safe]
         """
         mlogger.debug("run_gateway_task: ")
         try:
-            t1 = asyncio.ensure_future(self._keep_connect(uri, config), loop=self.loop)
+            self._add_gateway_task(uri, config)
+            with self.gw_tasks_lock:                
+                if self.gw_tasks.get(uri, None) == None:
+                    t1 = asyncio.ensure_future(self._keep_connect(uri), loop=self.loop)
+                    self.gw_tasks[uri] = t1
             
-            with self.gw_tasks_lock:
-                self.gw_tasks[uri]= t1
         except Exception:
-            mlogger.debug(traceback.format_exc())
+            mlogger.debug(traceback.format_exc())            
             
     def apply_configs(self, configs):
         """apply the agent configuration about ROS pub/sub forwarding with configs[python object from json]
@@ -292,9 +386,9 @@ class RosWsGatewayAgent():
                     agent.apply_configs(configs)
         """
         if isinstance(configs, List):
-            for data in configs:
+            for data in configs:                
                 self.apply_config(data)
-        elif isinstance(configs, Dict):
+        elif isinstance(configs, Dict):            
             self.apply_config(configs)
         else:
             mlogger.debug("Unknwon Configs")
@@ -316,12 +410,8 @@ class RosWsGatewayAgent():
             uri = data['address']
             active = data.get('active', True)
             if active:
-                gw = self.gw_map.get(uri, None)
-                if gw: # find running gateway client
-                    mlogger.debug("gateway is running")
-                    pass
-                else:
-                    self._run_gateway_task(uri, data)
+                self._run_gateway_task(uri, data)
+                    
         except Exception:
             mlogger.debug(traceback.format_exc())
             pass   
@@ -356,10 +446,9 @@ class RosWsGatewayAgent():
         mlogger.debug("api_remove_gateways %s",rule)
         try:
             for uri in rule:              
-                gw_task = self.gw_tasks.get(uri, None)
+                gw_task = self.gw_tasks.get(uri, None)                
                 if gw_task:
                     gw_task.cancel()
-
             return "ok"
         except Exception:
             mlogger.debug(traceback.format_exc())
@@ -489,15 +578,17 @@ class RosWsGatewayAgent():
             if gw:
                 for srv in rule:                    
                     gw.expose_service( srv['service'], srv['serviceType'],srv.get('israw', False))
+                return "ok"
             else:
                 temp_config = { 'address' : uri, 'expose-service': rule}
-                self._run_gateway_task(uri, temp_config)
-
-            return "ok"
+                self._run_gateway_task(uri, temp_config)            
+                return "reserved"            
         except Exception:
             mlogger.debug(traceback.format_exc())
 #            traceback.print_stack()
             pass
+
+        
 
 
     def api_action_expose(self, uri: str, rule: List[Dict[str,str]]):
@@ -587,12 +678,13 @@ class RosWsGatewayAgent():
             list of configuration if successful, empty list otherwise.                    
         """
         mlogger.debug("api_get_config %s",rule)
+                
         results = []
 
         for uri in rule:
             gw = self.gw_map.get(uri, None)
-            if gw:
-                results.append(self.gw_task_logs[uri].config)
+            if gw:                
+                results.append(self.gw_task_logs[uri].get_config())
 
         return results
 
