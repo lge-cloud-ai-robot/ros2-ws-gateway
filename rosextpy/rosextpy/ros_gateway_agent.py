@@ -403,14 +403,57 @@ class RosWsGatewayAgent():
                         'publish': [{'name': '/example_topic', 'messageType': 'std_msgs/msg/String'},
                                     {'name': '/my_topic', 'messageType': 'std_msgs/msg/String'}], 
                         'subscribe': [{'name': '/my_topic', 'messageType': 'std_msgs/msg/String'}]
+                        },
+                        {
+                            "service_name": "detect service",
+                            "service_uri": "http://localhost:9001/detect/",
+                            "service_method": "POST",
+                            "request_rule": {
+                                "content-type": "multipart/form-data",
+                                "topics": {
+                                "/image1": "sensor_msgs/msg/CompressedImage"
+                                },
+                                "mapping": [
+                                {
+                                    "in": "/image1",
+                                    "from": "data",
+                                    "out": "files",
+                                    "to": "files"
+                                }
+                                ]
+                            },
+                            "response_rule": {
+                                "content-type": "image/jpeg",
+                                "topics": {
+                                "/target": "sensor_msgs/msg/CompressedImage"
+                                },
+                                "mapping": [
+                                {
+                                    "in": "content",
+                                    "from": "",
+                                    "out": "/target",
+                                    "to": ""
+                                }
+                                ]
+                            }
                         }
         """        
         mlogger.debug("apply_config %s", data)
-        try:
-            uri = data['address']
-            active = data.get('active', True)
-            if active:
-                self._run_gateway_task(uri, data)
+        try:            
+            if data.get('address',None): 
+                uri = data['address']
+                active = data.get('active', True)
+                if active:
+                    self._run_gateway_task(uri, data)
+            elif data.get('service_uri', None):
+                t_rule = ROSRESTRule(
+                    service_name=data['service_name'],                     
+                    service_uri = data['service_uri'],
+                    service_method = data['service_method'],
+                    request_rule = data['request_rule'],
+                    response_rule = data['response_rule']
+                )
+                self.api_rosrest_add(t_rule)
                     
         except Exception:
             mlogger.debug(traceback.format_exc())
@@ -588,9 +631,6 @@ class RosWsGatewayAgent():
 #            traceback.print_stack()
             pass
 
-        
-
-
     def api_action_expose(self, uri: str, rule: List[Dict[str,str]]):
         """ set the action to be exposed to the specified gateway.            
         Args:
@@ -712,7 +752,7 @@ class RosWsGatewayAgent():
         Examples:
             api_add_ros_rest("{}")
         """
-        mlogger.debug("api_add_ros_rest %s", rule)
+        mlogger.debug("api_add_ros_rest%s", rule)
         try:
             v = [ *list(rule.response_rule['topics'].keys()), 
                     rule.service_uri, *list(rule.request_rule['topics'].keys())]            
