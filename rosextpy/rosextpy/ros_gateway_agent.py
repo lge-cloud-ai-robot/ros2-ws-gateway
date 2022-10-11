@@ -752,6 +752,12 @@ class RosWsGatewayAgent():
         Examples:
             api_add_ros_rest("{}")
         """
+
+        #
+        #  req-for-func: record ros-rest operation and run auto redo when system restarted
+        #  (220914)
+        #
+
         mlogger.debug("api_add_ros_rest%s", rule)
         try:
             v = [ *list(rule.response_rule['topics'].keys()), 

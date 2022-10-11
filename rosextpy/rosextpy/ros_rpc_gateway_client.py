@@ -58,7 +58,7 @@ class RosRPCGatewayClient():
         for topic, topic_type in self.request_rule['topics'].items():
             self.subscribers[topic]= self.node_manager.create_subscription(
                     topic_type, topic, self.gwid, 
-                    self._ros_subscription_callback)    
+                    {'callback': self._ros_subscription_callback, 'compression': None})
 
         for topic, topic_type in self.response_rule['topics'].items():
             self.publishers[topic]= self.node_manager.create_publisher(
@@ -76,7 +76,7 @@ class RosRPCGatewayClient():
         self.response_rule = response_rule
         self._init()
 
-    def _ros_subscription_callback(self, topic_name, mesg):
+    def _ros_subscription_callback(self, topic_name, compression,  mesg):
         mlogger.debug("_ros_subscription_callback  %s", topic_name) 
         outctx = None            
 
@@ -193,8 +193,7 @@ class RosRPCGatewayClient():
         if content_type[0] == 'application': 
             # json to ros message
             if content_type[1]=='json':
-                resp_data = resp.json()
-                resp_json = json.loads(resp_data)               
+                resp_json = resp.json()
                 req_ctx['body'] = resp_json # req_ctx us resued for response context
                 # make empty ROS message object for each topics in response_rule
                 outctx = dict(map(lambda x: (x, self.publishers[x].get_empty_obj()), self.response_rule['topics']))
