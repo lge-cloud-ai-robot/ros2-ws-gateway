@@ -1,2 +1,3 @@
-rosextpy/rosextpy/test
+rosextpy/rosextpy/tdevs
+rosextpy/rosextpy/tests
 dist
