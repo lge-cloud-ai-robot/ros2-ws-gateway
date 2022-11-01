@@ -340,7 +340,7 @@ class RosWsGatewayClient:
 
             self.loop = asyncio.get_event_loop()
 
-            self.gateway = RosWsGateway(WebSocketClientInterface(self.ws), 
+            self.gateway = RosWsGateway(WebSocketClientInterface(self.ws),
                     self.node_manager, self.loop, timout=self.default_timeout)
 
             # register handlers

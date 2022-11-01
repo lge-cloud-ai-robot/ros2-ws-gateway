@@ -84,7 +84,7 @@ class RosWsGateway():
     """
 
     def __init__(self, wshandle, node_mgr , loop,
-                 timeout=None, **kwargs):
+                 timeout=1.0, **kwargs):
         mlogger.debug("RosWsGateway created")
         self.activate = True
         self.bridge_id = uuid.uuid4()
@@ -145,12 +145,20 @@ class RosWsGateway():
         except Exception:
             mlogger.error(traceback.format_exc())
 
-#        mlogger.debug('send message CBOR %s', message)
-        
+        #mlogger.debug('send message CBOR %s', message)
+
         await self.wshandle.send(message)
+
 
     async def receive(self):
         return await self.wshandle.recv()
+
+    def _run_async_func(self, func):
+        future = asyncio.run_coroutine_threadsafe(func, self.loop)
+        try:
+            future.result(self.timeout)
+        except Exception:
+            future.cancel()
 
     async def _clear_act_pending_task(self, action_name):
         mlogger.debug("_clear_act_pending_task")
@@ -612,7 +620,7 @@ class RosWsGateway():
         else:
             israw = False
 
-        asyncio.run_coroutine_threadsafe( self.send(response, israw), self.loop)
+        self._run_async_func(self.send(response, israw))
 
     def _ros_send_actcli_result_callback(self, act_name, call_id, result_data):
         mlogger.debug("_ros_send_actcli_result_callback ")
@@ -639,7 +647,7 @@ class RosWsGateway():
         else:
             israw = False
 
-        asyncio.run_coroutine_threadsafe( self.send(response, israw), self.loop)
+        self._run_async_func(self.send(response, israw))
 
     def _ros_send_actcli_accept_callback(self, act_name, call_id, goal_handle):
         mlogger.debug("_ros_send_actcli_accept_callback ")
@@ -744,7 +752,7 @@ class RosWsGateway():
         else:
             israw = False
 
-        asyncio.run_coroutine_threadsafe( self.send(response, israw), self.loop)
+        self._run_async_func(self.send(response, israw))
         
 
     def _ros_send_subscription_callback(self, topic_name, compression, mesg):# node_manager needs sync callback
@@ -767,8 +775,7 @@ class RosWsGateway():
         else:
             israw = False
 
-        asyncio.run_coroutine_threadsafe( self.send(response, israw), self.loop)
-
+        self._run_async_func(self.send(response, israw))
 
     async def _send_back_operation_status(self, opid, msg='', level='none'):
         mlogger.debug("sendBackOperationStatus id= %s", opid)
@@ -901,51 +908,43 @@ class RosWsGateway():
 
     def add_publish(self, topic_name, topic_type, israw=False):
         """ add_publish """
-        mlogger.debug("add_publish")        
-        asyncio.run_coroutine_threadsafe(self.batch_queue.put(
-            ('pub', topic_name, topic_type, israw)), self.loop)
+        mlogger.debug("add_publish")
+        self._run_async_func(self.batch_queue.put(('pub', topic_name, topic_type, israw)))
 
     def remove_publish(self, topic_name):
         """ remove_publish """
         mlogger.debug("remove_publish")
-        asyncio.run_coroutine_threadsafe(self.batch_queue.put(
-            ('unadv', topic_name, "", None)), self.loop)
+        self._run_async_func(self.batch_queue.put(('unadv', topic_name, "", None)))
 
     def remove_subscribe(self, topic_name):
         """ remove_subscribe """
         mlogger.debug("remove_subscribe")
-        asyncio.run_coroutine_threadsafe(self.batch_queue.put(
-            ('unsub', topic_name, "", None)), self.loop)
+        self._run_async_func(self.batch_queue.put(('unsub', topic_name, "", None)))
 
     def add_subscribe(self, topic_name, topic_type, israw=False):
         """ add_subscribe """
-        mlogger.debug("add_subscribe")        
-        asyncio.run_coroutine_threadsafe(self.batch_queue.put(
-            ('sub', topic_name, topic_type, israw)), self.loop)
+        mlogger.debug("add_subscribe")
+        self._run_async_func(self.batch_queue.put(('sub', topic_name, topic_type, israw)))
 
     def expose_service(self, srv_name, srv_type, israw=False):
         """ expose_service """
-        mlogger.debug("expose_service")                
-        asyncio.run_coroutine_threadsafe(self.batch_queue.put(
-            ('expsrv', srv_name, srv_type, israw)), self.loop)
+        mlogger.debug("expose_service")
+        self._run_async_func(self.batch_queue.put(('expsrv', srv_name, srv_type, israw)))
 
     def hide_service(self, srv_name, israw=False):
         """ hide_service """
-        mlogger.debug("hide_service")        
-        asyncio.run_coroutine_threadsafe(self.batch_queue.put(
-            ('delsrv', srv_name, "", israw)), self.loop)
+        mlogger.debug("hide_service")
+        self._run_async_func(self.batch_queue.put(('delsrv', srv_name, "", israw)))
 
     def expose_action(self, act_name, act_type, israw=False):
         """ expose_action """
-        mlogger.debug("expose_action")        
-        asyncio.run_coroutine_threadsafe(self.batch_queue.put(
-            ('expact', act_name, act_type, israw)), self.loop)
+        mlogger.debug("expose_action")
+        self._run_async_func(self.batch_queue.put(('expact', act_name, act_type, israw)))
 
     def hide_action(self, act_name, israw=False):
         """ hide_action """
-        mlogger.debug("hide_action")        
-        asyncio.run_coroutine_threadsafe(self.batch_queue.put(
-            ('delact', act_name, "", israw)), self.loop)                          
+        mlogger.debug("hide_action")
+        self._run_async_func(self.batch_queue.put(('delact', act_name, "", israw)))
 
     def get_publihsed_topics(self) -> List[str]:
         """ get publihsed topic list

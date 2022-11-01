@@ -97,23 +97,21 @@ def ros_from_json(data, cls):
         instance : cls = cls()
         for name, value in list(data.items()):
             field_type = getattr(instance,name)
-
             if isinstance(field_type, ROSHeader):
-                seq = value.get('seq')
-                if seq: # ROS1 module
+                if 'seq' in value.keys():
                     nvalue = value
                     del nvalue['seq']
                     setattr(instance, name, ros_from_json(nvalue, field_type.__class__))
                 else:                    
                     setattr(instance, name, ros_from_json(value, field_type.__class__))
             elif isinstance(field_type, ROSTime):
-                secs = value.get('sec')
-                if secs:
+                if 'sec' in value.keys():
+                    secs = value.get('sec')
                     nsecs = value.get('nanosec')
                 else:
                     secs = value.get('secs')
                     nsecs = value.get('nsecs')
-                data_time = ROSTime(sec=secs, nanosec = nsecs)
+                data_time = ROSTime(sec=secs, nanosec = nsecs) # ROS2 Time
                 setattr(instance, name, data_time)
             elif isinstance(field_type, array.array):  
                 if field_type.typecode in 'bBu':  # Only char types will be encoded by b64
