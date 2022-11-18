@@ -81,7 +81,7 @@ class GatewayTaskLog():
         self.config['expose-action'] = []
         """
         config (dict): config dict
-            ex: {'title' : 'a1', 'active' : True,address': 'ws://129.254.90.138:9090', 
+            ex: {'title' : 'a1', 'active' : True,address': 'ws://xxx.xxx.xx.xxx:9090', 
                  'publish': [
                      { "name": "/chatter", "messageType": "std_msgs/msg/String", "israw": false},
                      { "name": "/sample", "messageType": "std_msgs/msg/String", "israw": false},
@@ -135,10 +135,10 @@ class GatewayTaskLog():
         return True                
 
 
-    def on_req_advertise(self,topicName, topicTypeStr, israw):
+    def on_req_advertise(self,topicName, topicTypeStr, israw, compression): ## 221102
         mlogger.debug("GatewayTaskLog:on_req_advertise")
         if not self._check_pub_topic_exist_(topicName):            
-            self.config['publish'].append({'name' : topicName, 'messageType' : topicTypeStr, 'israw' : israw})
+            self.config['publish'].append({'name' : topicName, 'messageType' : topicTypeStr, 'israw' : israw, 'compression' : compression}) ## 221102
 
     def on_req_unadvertise(self,topicName):
         mlogger.debug("GatewayTaskLog:on_req_unadvertise")        
@@ -282,12 +282,13 @@ class RosWsGatewayAgent():
                     # for each config title
                     for task_config in list(task_config_list.values()):
                         if 'publish' in task_config:                        
-                            for rule in task_config['publish']:                                                        
+                            for rule in task_config['publish']:
                                 israw = rule.get('israw', False)
+                                compression = rule.get('compression', None) ## 221102
                                 if rule.get('name',None) and rule.get('messageType', None):
-                                    client.add_publish( rule['name'], rule['messageType'], israw)
+                                    client.add_publish( rule['name'], rule['messageType'], israw, compression) ## 221102
                         if 'subscribe' in task_config:
-                            for rule in task_config['subscribe']:                            
+                            for rule in task_config['subscribe']:
                                 israw =rule.get('israw', False)
                                 if rule.get('name',None) and rule.get('messageType', None):
                                     client.add_subscribe( rule['name'], rule['messageType'], israw)
@@ -399,7 +400,7 @@ class RosWsGatewayAgent():
             data (dict): config dict
                     ex:{'title' : 'a1', 
                         'active' : True,
-                        'address': 'ws://129.254.90.138:9090', 
+                        'address': 'ws://xxx.xxx.xx.xxx:9090', 
                         'publish': [{'name': '/example_topic', 'messageType': 'std_msgs/msg/String'},
                                     {'name': '/my_topic', 'messageType': 'std_msgs/msg/String'}], 
                         'subscribe': [{'name': '/my_topic', 'messageType': 'std_msgs/msg/String'}]
@@ -515,7 +516,7 @@ class RosWsGatewayAgent():
             gw = self.gw_map.get(uri, None)
             if gw:
                 for pub in rule:
-                    gw.add_publish( pub['name'], pub['messageType'], pub.get('israw', False))
+                    gw.add_publish( pub['name'], pub['messageType'], pub.get('israw', False), pub.get('compression', None))
             else:
                 temp_config = { 'address' : uri, 'publish': rule}
 #                print("TEMP CONFIG ", temp_config)
@@ -849,7 +850,7 @@ class RosWsGatewayAgent():
         self.node_manager.stop()
         self.node_manager.join()
 
-    async def serve(self, websocekt, request=None):
+    async def serve(self, websocket, request=None):
         """ run the gateway endpoint service
         """
-        await self.endpoint.serve(websocekt, request)
+        await self.endpoint.serve(websocket, request)

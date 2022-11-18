@@ -29,6 +29,7 @@
 import sys
 import asyncio
 import logging
+import traceback
 from typing import List
 from tenacity import retry, wait
 import tenacity
@@ -60,7 +61,7 @@ def isNotForbbiden(value) -> bool:
 def logerror(retry_state: tenacity.RetryCallState):
     mlogger.exception(retry_state.outcome.exception())
 
-def OnRequestAdvertiseCallbck(topicName, topicTypeStr, israw):
+def OnRequestAdvertiseCallbck(topicName, topicTypeStr, israw, compression): ## 221102:
     pass
 
 def OnRequestUnadvertiseCallbck(topicName):
@@ -281,11 +282,11 @@ class RosWsGatewayClient:
         for callback in handlers:
             callback(*args, **kwargs)
     
-    def add_publish(self, topic_name, topic_type, israw=False):
-        mlogger.debug("add_publish %s:%s:%s",topic_name, topic_type, israw)        
+    def add_publish(self, topic_name, topic_type, israw=False, compression=None):
+        mlogger.debug("add_publish %s:%s:%s:%s",topic_name, topic_type, israw, compression) ## 221102
         if self.gateway:
-            self.gateway.add_publish(topic_name, topic_type, israw)        
-        self.on_handler_event(self._req_advertise_handlers, topic_name, topic_type, israw)        
+            self.gateway.add_publish(topic_name, topic_type, israw, compression)     ## 221102
+        self.on_handler_event(self._req_advertise_handlers, topic_name, topic_type, israw, compression) ## 221102
 
     def remove_publish(self, topic_name):
         mlogger.debug("remove_publish %s",topic_name)

@@ -1,3 +1,5 @@
 rosextpy/rosextpy/tdevs
 rosextpy/rosextpy/tests
 dist
+__pycache__/
+*.py[cod]

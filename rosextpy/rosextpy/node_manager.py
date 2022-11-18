@@ -44,7 +44,7 @@ import logging
 import rclpy
 from rclpy.action import ActionServer, ActionClient
 from rclpy.qos import qos_profile_system_default
-from rosextpy.ext_type_support import SerializedTypeLoader, TypeLoader, SrvTypeLoader, ActionTypeLoader, ros_from_json, ros_to_json
+from rosextpy.ext_type_support import SerializedTypeLoader, TypeLoader, SrvTypeLoader, ActionTypeLoader, ros_from_text_dict
 
 mlogger = logging.getLogger('node_manager')
 
@@ -78,23 +78,24 @@ class ActionClientManager:
   
     def encode_json_to_Goal(self, json_data):
         """remove_publish"""
-        return ros_from_json(json_data, self.act_cls.Goal)
+        return ros_from_text_dict(json_data, self.act_cls.Goal())
 
     def encode_json_to_Result(self, json_data):
         """remove_publish"""
-        return ros_from_json(json_data, self.act_cls.Result)
+        return ros_from_text_dict(json_data, self.act_cls.Result())
 
     def encode_json_to_Feeback(self, json_data):
         """remove_publish"""
-        return ros_from_json(json_data, self.act_cls.Feedback)    
+        return ros_from_text_dict(json_data, self.act_cls.Feedback())
 
     def __feedback_callback(self, feedback_msg, feedback_callback, call_id):
-        mlogger.debug("__feedback_callback ")
-        feedback_callback(self.act_name,call_id,feedback_msg.feedback)
+        mlogger.debug("__feedback_callback ")        
+        feedback_callback['callbck'](self.act_name,call_id, feedback_msg.feedback,feedback_callback['compression'])
 
     def __get_result_callback(self, future, action_result_callback, call_id):
         mlogger.debug("__get_result_callback ")
-        action_result_callback['callback'](self.act_name, call_id, callback_info['compression'], future.result().result)
+        action_result_callback['callback'](self.act_name, call_id, future.result().result,action_result_callback['compression'])
+
 
     # it will be called by gateway
     # 
@@ -287,15 +288,15 @@ class SrvClientManager:
     def _when_finished(self, fut : Future, call_id, callback_info):
         mlogger.debug("_when_finished")
         response = fut.result()
-        callback_info['callback'](self.srv_name, call_id, callback_info['compression'], response)
+        callback_info['callback'](self.srv_name, call_id, response, callback_info['compression'])
     
     def encode_json_to_request(self, json_data):
         """remove_publish"""
-        return ros_from_json(json_data, self.srv_cls.Request)
+        return ros_from_text_dict(json_data, self.srv_cls.Request())
 
     def encode_json_to_respone(self, json_data):
         """remove_publish"""
-        return ros_from_json(json_data, self.srv_cls.Response)    
+        return ros_from_text_dict(json_data, self.srv_cls.Response())    
     
     # it will be called by gateway
     # response_callback--> receive ROS response and send JSON message response
@@ -408,9 +409,9 @@ class SubscriptionManager:
         mlogger.debug("subscription to %s", self.topic_name)
 
     def _inter_callback(self, message):
-        mlogger.debug('mesage received!!! %s', type(message))
+        #mlogger.debug('mesage received!!! %s', type(message))
         for callback_info in list(self.callbacks.values()):
-            callback_info['callback'](self.topic_name, callback_info['compression'], message)
+            callback_info['callback'](self.topic_name, message, callback_info['compression'])
 
     def add_subscription(self, bridge_id, callbackinfo):
         """add_subscription"""
@@ -449,9 +450,12 @@ class PublishManager:
         mlogger.debug("node create_publisher completed")
         self.bridges = {}
 
-    def get_empty_obj(self):
+    def get_class_obj(self):
         return self.type_cls()
 
+    def get_class_type(self):
+        return self.type_cls
+        
     def add_publish(self, bridge_id):
         """add_publish"""
         self.bridges[bridge_id] = 1
@@ -460,31 +464,9 @@ class PublishManager:
         """remove_publish"""
         self.bridges.pop(bridge_id, None)
 
-    def encode_json(self, json_data):
-        """remove_publish"""
-        return ros_from_json(json_data, self.type_cls)
-
-    #  data=b'hello'
-    #  {'type': 'Buffer', 'data': list(data)}   
-
-    def raw_publish(self, ros_mesg):
-        mlogger.debug("raw_publish called")
+    def publish(self, ros_mesg):
+        mlogger.debug("publish called")
         self.handle.publish(ros_mesg)
-
-    def publish(self, json_data):
-        """publish"""
-        mlogger.debug("publish %s",json_data)
-        if isinstance(json_data, bytes):
-            self.handle.publish(json_data)
-        else:
-            if 'type' in json_data:
-                if json_data['type'] == 'Buffer':
-                    self.handle.publish(bytes(json_data['data']))
-                else:
-                    self.handle.publish(self.encode_json(json_data))
-            else:
-                # cmdData['msg'] will be json or {"type":"Buffer","data"}"
-                self.handle.publish(self.encode_json(json_data))
 
     def destroy(self):
         self.bridges={}
@@ -495,8 +477,6 @@ class PublishManager:
             self.node.destroy_publisher(self.handle)
             return None
         return self
-            
-
 
 # manage all subscription and publisher
 
@@ -617,14 +597,14 @@ class NodeManager(Thread):
                     srvtype = info[1][0]
         return srvtype
 
-    def get_topic_type(self, type_name):
-        mlogger.debug("get_topic_type %s", type_name)
-        topictype = self.topic_name_and_types.get(type_name)  
+    def get_topic_type(self, topic_name):
+        mlogger.debug("get_topic_type %s", topic_name)
+        topictype = self.topic_name_and_types.get(topic_name)  
         if not topictype:            
             topictypes = self.node.get_topic_names_and_types()            
             for info in list(topictypes):
                 self.topic_name_and_types[info[0]] = info[1][0]
-                if type_name == info[0]:                    
+                if topic_name == info[0]:                    
                     topictype = info[1][0]
         return topictype        
 
@@ -663,8 +643,8 @@ class NodeManager(Thread):
                     topic_type = self.get_topic_type(topic_name)
                     if not topic_type:
                         raise NodeManagerException(
-                            "The topic {topic} is not published ".format(topic=topic_name))                
-                sub_mgr = SubscriptionManager(self.node, topic_type, topic_name, queue_length, israw)                
+                            "The topic {topic} is not published ".format(topic=topic_name))
+                sub_mgr = SubscriptionManager(self.node, topic_type, topic_name, queue_length, israw)
                 self.subscriptions[topic_name] = sub_mgr
             except Exception:
                 mlogger.debug(traceback.format_exc())
@@ -674,8 +654,7 @@ class NodeManager(Thread):
 
     def create_publisher(self, topic_type, topic_name, bridge_id,  queue_length=10, israw=False):
         """create_publisher"""
-        mlogger.debug("create_publisher")
-        
+        mlogger.debug("create_publisher")        
         pub_mgr = self.publisher.get(topic_name)
         if not pub_mgr:
             try:

@@ -34,7 +34,8 @@ from typing import List, Dict, Tuple, Any
 import cbor
 from rosextpy.websocket_utils import WebSocketDisconnect
 from rosextpy.node_manager import NodeManager, ROSServiceFailException
-from rosextpy.ext_type_support import RosJsonEncodder, ros_to_json, ros_from_json
+from rosextpy.ext_type_support import ros_to_text_dict, ros_to_bin_dict, ros_serialize, ros_deserialize
+from rosextpy.ext_type_support import ros_from_text_dict, ros_from_bin_dict, ros_from_compress, ros_to_compress
 
 mlogger = logging.getLogger('ros_ws_gateway')
 
@@ -63,17 +64,16 @@ async def OnErrorCallback(ws_gateway, err: Exception):
 
 class MessageParser():
     """ MessageParser """
-
     def parse(self, msg):
         """ process """
         try:
-            return json.loads(msg)
-        except Exception:            
-            try:                
-                return cbor.loads(msg)                
-            except Exception:
-                mlogger.error(traceback.format_exc())
-                raise InvalidCommandException
+            if isinstance(msg, bytes):
+                return cbor.loads(msg)
+            else:
+                return json.loads(msg)
+        except Exception:
+            mlogger.error(traceback.format_exc())
+            raise InvalidCommandException
 
 
 def bytesToJSBuffer(mesg):
@@ -82,7 +82,6 @@ def bytesToJSBuffer(mesg):
 class RosWsGateway():
     """ Process ros2 websocket gateway protocol
     """
-
     def __init__(self, wshandle, node_mgr , loop,
                  timeout=1.0, **kwargs):
         mlogger.debug("RosWsGateway created")
@@ -134,24 +133,17 @@ class RosWsGateway():
         self.exposed_services: Dict[str,str] = {}
         self.exposed_actions: Dict[str,str] = {}
 
-    async def send(self, data, israw=False):
-        mlogger.debug("send %s", type(data))        
+    async def send(self, data:Dict[str,Any], hasbytes:bool=False):
+        mlogger.debug("send %s", type(data))
         try:
-            if israw:                
+            if hasbytes:
                 message = cbor.dumps(data)
             else:
-#                message = json.dumps(data, cls=RosJsonEncodder)
-                message = ros_to_json(data)
+                message = json.dumps(data)
+            await self.wshandle.send(message)
         except Exception:
-            mlogger.error(traceback.format_exc())
-
-        #mlogger.debug('send message CBOR %s', message)
-
-        await self.wshandle.send(message)
-
-
-    async def receive(self):
-        return await self.wshandle.recv()
+            mlogger.debug(traceback.format_exc())
+            raise
 
     def _run_async_func(self, func):
         future = asyncio.run_coroutine_threadsafe(func, self.loop)
@@ -159,6 +151,8 @@ class RosWsGateway():
             future.result(self.timeout)
         except Exception:
             future.cancel()
+            # mlogger.error(traceback.format_exc())
+            # raise
 
     async def _clear_act_pending_task(self, action_name):
         mlogger.debug("_clear_act_pending_task")
@@ -205,6 +199,7 @@ class RosWsGateway():
             await self.on_handler_event(self._disconnect_handlers, self)
         except Exception:
             mlogger.error(traceback.format_exc())
+            raise
         return res
 
     def is_closed(self):
@@ -225,18 +220,18 @@ class RosWsGateway():
     #         raise
    
     async def on_message(self, data):
-        mlogger.debug("on_message %s", data)
-##        print("received ", data)
+        mlogger.debug("on_message %s", type(data))
         try:
             cmd_data = self.parser.parse(data)
             await self._execute_command(cmd_data)
         except InvalidCommandException as err:
             mlogger.error(
-                "Invalid command message message=%s, error=%s", data, err)
+                "Invalid command message message=[%s], error=%s", data[:80], err)
             await self.on_error(err)
         except Exception as err:
             mlogger.error(
-                "Some command error message=%s, error=%s", data, err)
+                "Some command error message=[%s], error=%s", data[:580], err)
+            mlogger.error(traceback.format_exc())
             await self.on_error(err)
             raise
 
@@ -321,15 +316,27 @@ class RosWsGateway():
         return "OK"
 
     async def _op_publish(self, cmd_data): # When encoding is not cbor
-        mlogger.debug("_op_publish %s", cmd_data)
+        mlogger.debug("_op_publish %s", cmd_data['topic'])
         topic = cmd_data['topic']
         if not topic in self.published_topic.keys():
             raise RosWsGatewayException(
                 "The topic {topic} does not exist".format(topic=topic))        
         if self.node_manager:
             pub = self.node_manager.get_publisher_by_topic(topic)
-            if pub:                   
-                pub.publish(cmd_data['msg'])
+            if pub: 
+                compression = cmd_data.get('compression', None)
+                if compression == None:
+                    pub.publish(ros_from_text_dict(cmd_data['msg'], pub.get_class_obj()))
+                elif compression=='js-buffer':
+                    pub.publish(ros_from_bin_dict(cmd_data['msg']['data'][0], pub.get_class_obj()))
+                elif compression=='cbor':
+                    pub.publish(ros_from_bin_dict(cmd_data['msg'], pub.get_class_obj()))
+                elif compression=='cbor-raw':
+                    pub.publish(ros_deserialize(cmd_data['msg'], pub.get_class_type()))
+                elif compression=='zip':
+                    pub.publish(ros_from_compress(cmd_data['msg'], pub.get_class_obj()))
+                else:
+                    raise RosWsGatewayException('unknown compression methods={comp}'.format(comp=compression))                
             else:
                 # add advertise and publish
                 pass       
@@ -342,8 +349,8 @@ class RosWsGateway():
             topic_name = cmd_data['topic']
             topic_type = cmd_data.get('type', None) # In new Bridge Protocol , it is option            
             queue_length = cmd_data.get('queue_length', 0)
-            compression = cmd_data.get('compression', 'none')
-            israw = False if compression=='none' else True            
+            compression = cmd_data.get('compression', None) ## 221102
+            israw = True if compression=='cbor-raw' else False
             if self.node_manager:
                 if not topic_type:
                     topic_type = self.node_manager.get_topic_type(topic_name)
@@ -354,7 +361,8 @@ class RosWsGateway():
                     queue_length = queue_length, israw = israw)
                     # queue_length = queue_length, israw = israw)
         except Exception:
-            mlogger.error(traceback.format_exc())       
+            mlogger.error(traceback.format_exc())
+            raise
 
         return "OK"
 
@@ -400,7 +408,8 @@ class RosWsGateway():
                 else:
                     pass        
         except Exception:
-            mlogger.error(traceback.format_exc())       
+            mlogger.error(traceback.format_exc())
+            raise
 
         return "OK"
 
@@ -425,7 +434,7 @@ class RosWsGateway():
             if t1:                
                 (rq_future, resp_cls) = t1                
                 res_value = cmd_data['values']
-                ros_response = ros_from_json(res_value, resp_cls)
+                ros_response = ros_from_text_dict(res_value, resp_cls())
                 if cmd_data['result']:
                     rq_future.set_result(ros_response)
                 else:       
@@ -458,6 +467,7 @@ class RosWsGateway():
             
         except Exception:
             mlogger.error(traceback.format_exc())
+            raise
         return "OK"
 
     #
@@ -478,6 +488,7 @@ class RosWsGateway():
         
         except Exception:
             mlogger.error(traceback.format_exc())       
+            raise
         return "OK"
 
     #
@@ -499,6 +510,7 @@ class RosWsGateway():
                 self._adv_action_servers[action_name] = {'svc' :act_svc, 'called': {}}            
         except Exception:
             mlogger.error(traceback.format_exc())
+            raise
         return "OK"
 
 
@@ -524,6 +536,7 @@ class RosWsGateway():
                     pass        
         except Exception:
             mlogger.error(traceback.format_exc())       
+            raise
 
         return "OK"
 
@@ -543,7 +556,7 @@ class RosWsGateway():
             if t1:                
                 (rq_future, goal_handle, resp_cls, feed_cls) = t1
                 res_value = cmd_data['values']
-                ros_response = ros_from_json(res_value, resp_cls)
+                ros_response = ros_from_text_dict(res_value, resp_cls())
                 if cmd_data['result']:
                     goal_handle.succeed()
                     rq_future.set_result(ros_response)
@@ -571,7 +584,7 @@ class RosWsGateway():
                 (rq_future, goal_handle, resp_cls, feed_cls) = t1                
                 res_value = cmd_data['values']
                 #print(dir(ctx.act_cls.Feedback))
-                feedback = ros_from_json(res_value, feed_cls)
+                feedback = ros_from_text_dict(res_value, feed_cls())
                 goal_handle.publish_feedback(feedback)
             else:
                 return "Unknon action call id"
@@ -593,93 +606,43 @@ class RosWsGateway():
         
         except Exception:
             mlogger.error(traceback.format_exc())       
+            raise
         return "OK"
 
-    def _ros_send_actcli_feedback_callback(self, act_name, call_id, feedback_data):
-        mlogger.debug("_ros_send_actcli_feedback_callback ")                
+    def _ros_send_actcli_feedback_callback(self, act_name, call_id, feedback_data, compression=None):
+        mlogger.debug("_ros_send_actcli_feedback_callback ")
         response = {"op": "action_feedback", 
                     "action": act_name,
                     "id": call_id,
-                    "value" : feedback_data,                    
-                    "result": True }       
+                    "values" : ros_to_text_dict(feedback_data),
+                    "result": True }
+        if compression != None or compression !='none':
+            response['compression'] = compression
+        self._run_async_func(self.send(response))
 
-        if isinstance(feedback_data, bytes):
-            if compression == 'js-buffer':
-                response['value'] = bytesToJSBuffer(feedback_data)
-                israw = False
-            elif compression=='cbor-raw':
-                (secs, nsecs) = self.node_manager.get_node().get_clock().now().seconds_nanoseconds()
-                response["value"] = {
-                "secs": secs,
-                "nsecs": nsecs,
-                "bytes": feedback_data,
-                }
-                israw = True
-            else:
-                israw = True                
-        else:
-            israw = False
-
-        self._run_async_func(self.send(response, israw))
-
-    def _ros_send_actcli_result_callback(self, act_name, call_id, result_data):
+    def _ros_send_actcli_result_callback(self, act_name, call_id, result_data, compression=None):
         mlogger.debug("_ros_send_actcli_result_callback ")
         response = {"op": "action_result", 
                     "action": act_name,
                     "id": call_id,
-                    "value" : result_data,                    
+                    "values" : ros_to_text_dict(result_data),
                     "result": True }
-
-        if isinstance(result_data, bytes):
-            if compression == 'js-buffer':
-                response['value'] = bytesToJSBuffer(result_data)
-                israw = False
-            elif compression=='cbor-raw':
-                (secs, nsecs) = self.node_manager.get_node().get_clock().now().seconds_nanoseconds()
-                response["value"] = {
-                "secs": secs,
-                "nsecs": nsecs,
-                "bytes": result_data,
-                }
-                israw = True
-            else:
-                israw = True
-        else:
-            israw = False
-
-        self._run_async_func(self.send(response, israw))
+        if compression != None or compression !='none':
+            response['compression'] = compression                    
+        self._run_async_func(self.send(response))
 
     def _ros_send_actcli_accept_callback(self, act_name, call_id, goal_handle):
         mlogger.debug("_ros_send_actcli_accept_callback ")
-        # response = {"op": "action_accept", 
-        #             "action": act_name,
-        #             "id": call_id,
-        #             "value" : result_data,                    
-        #             "result": True }
-
-        # print("RESULT IS ", response)
-
-
 
     def _ros_send_actcli_reject_callback(self, act_name, call_id, goal_handle):
         mlogger.debug("_ros_send_actcli_reject_callback ")
-        # response = {"op": "action_reject", 
-        #             "action": act_name,
-        #             "id": call_id,
-        #             "value" : result_data,                    
-        #             "result": True }
-
-        # print("RESULT IS ", response)
-
 
     async def _ros_action_proxy_callback(self, action_name, action_type, goal_handle):
         mlogger.debug("_ros_action_proxy_callback")
-
         callid = str(uuid.uuid4())
-
         callmsg = {'op' : 'call_action', 'id' : callid,
                 'action' : action_name, 'type' : action_type,
-                'args' : ros_to_json(goal_handle._goal_request)
+                'args' : ros_to_text_dict(goal_handle._goal_request)
             }
         ctx = self._adv_action_servers.get(action_name)
         if ctx:
@@ -708,7 +671,7 @@ class RosWsGateway():
 
         callmsg = {'op': 'call_service', 'id': callid, 
                 'service': srv_name, 'type' : srv_type,
-                'args' : ros_to_json(request)
+                'args' : ros_to_text_dict(request)
             }        
         ctx =  self._adv_services.get(srv_name)        
         if ctx:
@@ -727,55 +690,41 @@ class RosWsGateway():
             mlogger.debug("The service [%s] was not advertised", srv_name)  
             raise ROSServiceFailException(srv_name)
 
-    def _ros_send_srvcli_response_callback(self, srv_name, call_id, compression, res_mesg):# node_manager needs sync callback
+    def _ros_send_srvcli_response_callback(self, srv_name, call_id, res_mesg, compression=None):# node_manager needs sync callback
         mlogger.debug("_ros_send_srvcli_response_callback ")
         response = {"op": "service_response", 
                     "service": srv_name,
                     "id": call_id,
-                    "values" : res_mesg,                    
                     "result": True }
+        self._send_mesg_data(response,'values', res_mesg, compression)
 
-        if isinstance(res_mesg, bytes):
-            if compression == 'js-buffer':
-                response['value'] = bytesToJSBuffer(res_mesg)
-                israw = False
+    def _send_mesg_data(self, mesg_items: Dict[str,Any], data_tag, data_mesg, compression=None):
+        if compression==None or compression=='none' :
+            mesg_items[data_tag] = ros_to_text_dict(data_mesg)
+            self._run_async_func(self.send(mesg_items))
+        else:
+            if compression=='js-buffer':
+                mesg_items[data_tag] = bytesToJSBuffer(ros_to_bin_dict(data_mesg)) # it will be text                
+            elif compression=='cbor':
+                mesg_items[data_tag] = ros_to_bin_dict(data_mesg)                
             elif compression=='cbor-raw':
                 (secs, nsecs) = self.node_manager.get_node().get_clock().now().seconds_nanoseconds()
-                response["value"] = {
-                "secs": secs,
-                "nsecs": nsecs,
-                "bytes": res_mesg,
-                }
-                israw = True
+                if isinstance(data_mesg, bytes):
+                    mesg_items[data_tag] = {"secs": secs,"nsecs": nsecs,"bytes": data_mesg}
+                else:
+                    mesg_items[data_tag] = {"secs": secs,"nsecs": nsecs,"bytes": ros_serialize(data_mesg)}
+            elif compression=='zip':
+                mesg_items[data_tag] = ros_to_compress(data_mesg)
             else:
-                israw = True
-        else:
-            israw = False
+                mlogger.debug('unknown compression methods %s', compression)
+                raise Exception('unknown compression methods:', compression)
+            mesg_items['compression'] = compression
+            self._run_async_func(self.send(mesg_items, True))
 
-        self._run_async_func(self.send(response, israw))
-        
-
-    def _ros_send_subscription_callback(self, topic_name, compression, mesg):# node_manager needs sync callback
-        mlogger.debug("sendSubscription  %s", topic_name)
-        response = {"op": "publish", "topic": topic_name, "msg": mesg}
-        if isinstance(mesg, bytes):
-            if compression == 'js-buffer':
-                response['msg'] = bytesToJSBuffer(mesg)
-                israw = False
-            elif compression=='cbor-raw':
-                (secs, nsecs) = self.node_manager.get_node().get_clock().now().seconds_nanoseconds()
-                response["msg"] = {
-                "secs": secs,
-                "nsecs": nsecs,
-                "bytes": mesg,
-                }
-                israw = True
-            else:
-                israw = True
-        else:
-            israw = False
-
-        self._run_async_func(self.send(response, israw))
+    def _ros_send_subscription_callback(self, topic_name, mesg, compression):# node_manager needs sync callback
+        mlogger.debug("sendSubscription  %s", topic_name)        
+        response = {"op": "publish", "topic": topic_name}  ## 221102        
+        self._send_mesg_data(response, 'msg', mesg, compression)      
 
     async def _send_back_operation_status(self, opid, msg='', level='none'):
         mlogger.debug("sendBackOperationStatus id= %s", opid)
@@ -792,24 +741,31 @@ class RosWsGateway():
 #            print("RUN BATCH")
             item_tuple = await self.batch_queue.get()
 
-            mlogger.debug("item is %s:%s:%s:%s",
-                          item_tuple[0], item_tuple[1], item_tuple[2], item_tuple[3])
-#            print("item is ",
-#                          item_tuple[0], item_tuple[1], item_tuple[2], item_tuple[3])
+            mlogger.debug("item is %s:%s:%s:%s:%s", # 'pub', topic_name, topic_type, israw, compress
+                          item_tuple[0], item_tuple[1], item_tuple[2], item_tuple[3], item_tuple[4])
             try:
                 if item_tuple[0] == 'pub':
                     self.id_counter += 1
                     subid = ''.join(
                         ['subscribe:', str(self.bridge_id), ':', str(self.id_counter)])
+
+                    compression = item_tuple[4]   ## 221102
+                    if item_tuple[3]==True:      ## 221102
+                        compression = 'cbor-raw'
+
                     await self._op_subscribe(
-                        {'op': 'subscribe', 'id': subid,
-                            'topic': item_tuple[1], 'type': item_tuple[2], 'compression':  'js-buffer' if item_tuple[3]==True else 'none'})
-#                            'topic': item_tuple[1], 'type': item_tuple[2]})
-#                            'topic': item_tuple[1], 'type': item_tuple[2], 'compression': 'cbor-raw'})
+                         {'op': 'subscribe', 'id': subid,
+                             'topic': item_tuple[1], 'type': item_tuple[2], 'compression':  compression}) ## 221102
+
                     advid = ''.join(
                         ['advertise:', str(self.bridge_id), ':', str(self.id_counter)])
+
                     data = {'op': 'advertise', 'id': advid,
                             'topic': item_tuple[1], 'type': item_tuple[2]}
+
+                    if item_tuple[4]: ## 221102
+                        data['compression'] = item_tuple[4] ## 221102
+
                     await self.send(data)
 
                 elif item_tuple[0] == 'unadv':
@@ -818,13 +774,13 @@ class RosWsGateway():
                         await self._op_unsubscribe({'op' : 'unsubscribe', 'topic' : item_tuple[1]})
                         cmdid= ''.join(
                             ['unadvertise:', str(self.bridge_id), ':', str(self.id_counter)])
-                        data = {'op' : 'unadvertise', 'id': cmdid, 'topic': item_tuple[1]}                    
+                        data = {'op' : 'unadvertise', 'id': cmdid, 'topic': item_tuple[1]}
                         await self.send(data)
                     except RosWsGatewayException as err:
                         mlogger.debug("unadv exception '%s'", err)
                         pass
 
-                elif item_tuple[0] == 'sub':                    
+                elif item_tuple[0] == 'sub':
                     self.id_counter += 1
                     advid = ''.join(
                         ['advertise:', str(self.bridge_id), ':', str(self.id_counter)])
@@ -835,7 +791,7 @@ class RosWsGateway():
                         ['subscribe:', str(self.bridge_id), ':', str(self.id_counter)])
                     data = {'op': 'subscribe',  'id': subid,
                             'topic': item_tuple[1], 'type': item_tuple[2], 
-                            'compression':  'js-buffer' if item_tuple[3]==True else 'none'}
+                            'compression':  'cbor-raw' if item_tuple[3]==True else 'none'}
                     await self.send(data)             
 
                 elif item_tuple[0] == 'unsub':
@@ -844,7 +800,7 @@ class RosWsGateway():
                         await self._op_unadvertise({'op' : 'unadvertise', 'topic' : item_tuple[1]})
                         cmdid= ''.join(
                             ['unsubscribe:', str(self.bridge_id), ':', str(self.id_counter)])
-                        data = {'op' : 'unsubscribe', 'id': cmdid, 'topic': item_tuple[1]}                    
+                        data = {'op' : 'unsubscribe', 'id': cmdid, 'topic': item_tuple[1]}
                         await self.send(data)
                     except RosWsGatewayException as err:
                         mlogger.debug("unsub exception '%s'", err)
@@ -863,9 +819,9 @@ class RosWsGateway():
                     reqid = ''.join(
                         ['delsrv:', str(self.bridge_id), ':', str(self.id_counter)])
                     data = {'op' : 'unadvertise_service', 'id': reqid, 
-                                'service': item_tuple[1]}                    
+                                'service': item_tuple[1]}
                     await self.send(data)
-                    self.exposed_services.pop(item_tuple[1], None)                    
+                    self.exposed_services.pop(item_tuple[1], None)
                 elif item_tuple[0] == 'expact': # expose action to remote gateway
                     self.id_counter += 1
                     reqid = ''.join(
@@ -879,7 +835,7 @@ class RosWsGateway():
                     reqid = ''.join(
                         ['delact:', str(self.bridge_id), ':', str(self.id_counter)])
                     data = {'op' : 'unadvertise_action', 'id': reqid, 
-                                'action': item_tuple[1]}                    
+                                'action': item_tuple[1]}
                     await self.send(data)
                     self.exposed_actions.pop(item_tuple[1], None)
                 else:
@@ -887,9 +843,10 @@ class RosWsGateway():
             except Exception as err:
                 mlogger.error(traceback.format_exc())
                 mlogger.debug("Error in batch_cmd for '%s'", err)
+                raise
 
     async def _execute_command(self, command_data):
-        mlogger.debug("executeCommand %s", str(command_data))
+        mlogger.debug("executeCommand %s", str(command_data['op']))
 #        print("executeCommand ", str(command_data))
         op_func = self.op_map.get(command_data['op'])
         if not op_func:
@@ -906,45 +863,45 @@ class RosWsGateway():
             await self._send_back_operation_status(
                 command_data.get('id','0'), 'error', json.dumps(error_data))
 
-    def add_publish(self, topic_name, topic_type, israw=False):
+    def add_publish(self, topic_name, topic_type, israw=False, compression=None): ## 221102
         """ add_publish """
         mlogger.debug("add_publish")
-        self._run_async_func(self.batch_queue.put(('pub', topic_name, topic_type, israw)))
+        self._run_async_func(self.batch_queue.put(('pub', topic_name, topic_type, israw, compression))) ## 221102
 
     def remove_publish(self, topic_name):
         """ remove_publish """
         mlogger.debug("remove_publish")
-        self._run_async_func(self.batch_queue.put(('unadv', topic_name, "", None)))
+        self._run_async_func(self.batch_queue.put(('unadv', topic_name, "", None, None)))
 
     def remove_subscribe(self, topic_name):
         """ remove_subscribe """
         mlogger.debug("remove_subscribe")
-        self._run_async_func(self.batch_queue.put(('unsub', topic_name, "", None)))
+        self._run_async_func(self.batch_queue.put(('unsub', topic_name, "", None, None)))
 
     def add_subscribe(self, topic_name, topic_type, israw=False):
         """ add_subscribe """
         mlogger.debug("add_subscribe")
-        self._run_async_func(self.batch_queue.put(('sub', topic_name, topic_type, israw)))
+        self._run_async_func(self.batch_queue.put(('sub', topic_name, topic_type, israw, None)))
 
     def expose_service(self, srv_name, srv_type, israw=False):
         """ expose_service """
         mlogger.debug("expose_service")
-        self._run_async_func(self.batch_queue.put(('expsrv', srv_name, srv_type, israw)))
+        self._run_async_func(self.batch_queue.put(('expsrv', srv_name, srv_type, israw, None)))
 
     def hide_service(self, srv_name, israw=False):
         """ hide_service """
         mlogger.debug("hide_service")
-        self._run_async_func(self.batch_queue.put(('delsrv', srv_name, "", israw)))
+        self._run_async_func(self.batch_queue.put(('delsrv', srv_name, "", israw, None)))
 
     def expose_action(self, act_name, act_type, israw=False):
         """ expose_action """
         mlogger.debug("expose_action")
-        self._run_async_func(self.batch_queue.put(('expact', act_name, act_type, israw)))
+        self._run_async_func(self.batch_queue.put(('expact', act_name, act_type, israw, None)))
 
     def hide_action(self, act_name, israw=False):
         """ hide_action """
         mlogger.debug("hide_action")
-        self._run_async_func(self.batch_queue.put(('delact', act_name, "", israw)))
+        self._run_async_func(self.batch_queue.put(('delact', act_name, "", israw, None)))
 
     def get_publihsed_topics(self) -> List[str]:
         """ get publihsed topic list

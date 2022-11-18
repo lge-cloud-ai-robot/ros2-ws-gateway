@@ -41,6 +41,16 @@ import importlib
 import os
 import logging
 import traceback
+import array
+from rclpy.serialization import deserialize_message
+from rclpy.serialization import serialize_message
+from json import JSONEncoder
+import pybase64
+import zlib as Compressor
+import cbor
+from builtin_interfaces.msg._time import Time as ROSTime
+from std_msgs.msg._header import Header as ROSHeader
+import numpy
 
 mlogger = logging.getLogger('ext_type_support')
 
@@ -73,96 +83,158 @@ def SerializedTypeLoader(clsname):
         pass
     return temp
 
-from builtin_interfaces.msg._time import Time as ROSTime
-from std_msgs.msg._header import Header as ROSHeader
-
 # for sequnce<uint8>
-# in ROS2 , type of sequnce is 'array.array'
-
-def ros_from_json(data, cls):
-    if issubclass(cls, List):
-        list_type = cls.__args__[0]
-        instance: list = list()
-        for value in data:
-            instance.append(ros_from_json(value, list_type))        
-        return instance
-    elif issubclass(cls, Dict):            
-            key_type = cls.__args__[0]
-            val_type = cls.__args__[1]
-            instance: dict = dict()
-            for key, value in list(data.items()):
-                instance.update(ros_from_json(key, key_type), ros_from_json(value, val_type))
-            return instance
-    else:
-        instance : cls = cls()
-        for name, value in list(data.items()):
-            field_type = getattr(instance,name)
-            if isinstance(field_type, ROSHeader):
-                if 'seq' in value.keys():
-                    nvalue = value
-                    del nvalue['seq']
-                    setattr(instance, name, ros_from_json(nvalue, field_type.__class__))
-                else:                    
-                    setattr(instance, name, ros_from_json(value, field_type.__class__))
-            elif isinstance(field_type, ROSTime):
-                if 'sec' in value.keys():
-                    secs = value.get('sec')
-                    nsecs = value.get('nanosec')
-                else:
-                    secs = value.get('secs')
-                    nsecs = value.get('nsecs')
-                data_time = ROSTime(sec=secs, nanosec = nsecs) # ROS2 Time
-                setattr(instance, name, data_time)
-            elif isinstance(field_type, array.array):  
-                if field_type.typecode in 'bBu':  # Only char types will be encoded by b64
-                    b64_data = pybase64.b64decode(value)
-                    field_type.frombytes(b64_data)
-                else: #make loop                    
-                    setattr(instance, name, value)
-            elif isinstance(field_type, bytes):
-                b64_data = pybase64.b64decode(value)
-                setattr(instance, name, b64_data)
-            elif hasattr(field_type, 'get_fields_and_field_types') and isinstance(value, (dict, tuple, list, set, frozenset)):
-                setattr(instance, name, ros_from_json(value, field_type.__class__))
-            elif isinstance(field_type, float):
-                setattr(instance, name, float(value))
-            else:
-                setattr(instance, name, value)
-        return instance
-
-import json
-import array
-from json import JSONEncoder
-import pybase64
-class RosJsonEncodder(JSONEncoder):
-    def default(self, obj):
-        try:
-            if hasattr(obj,'get_fields_and_field_types'): # it will be ros type
-                members: dict = obj._fields_and_field_types
-                results = {}
-                for name in members.keys():                
-                    results[name] = getattr(obj, name)
-                return results
-            elif isinstance(obj, array.array):
-                if obj.typecode in 'bBu':
-                    b64data = str(pybase64.b64encode(obj.tobytes()), 'utf-8')                
-                    return b64data
-                else:                    
-                    return obj.tolist()                    
-            elif isinstance(obj, bytes):   
-                b64data = str(pybase64.b64encode(obj), 'utf-8')
-                # add obj.tolist to base64 encoded list
-                return b64data
-            else:            
-                return json.JSONEncoder.default(self,obj)
-        except Exception as err:
-            raise TypeModuleError(err)
-
-def ros_to_json(obj):
-    return json.dumps(obj,cls=RosJsonEncodder)     
+# in ROS2 , type of sequnce is 'array.array'         
 
 def is_ros_obj(obj):
     return hasattr(obj,'get_fields_and_field_types')   
+
+def ros_to_text_dict(obj):
+    if hasattr(obj,'get_fields_and_field_types'):    
+        members: dict = obj._fields_and_field_types
+        results = {}
+        for name in members.keys():
+            results[name] = ros_to_text_dict(getattr(obj, name))
+        return results
+    elif isinstance(obj, array.array):
+        return pybase64.b64encode(obj.tobytes()).decode()
+    elif isinstance(obj, numpy.ndarray):
+        return obj.tolist()
+        # return pybase64.b64encode(obj.tobytes()).decode()        
+    elif isinstance(obj, bytes):
+        return pybase64.b64encode(obj).decode()
+    elif isinstance(obj, list):
+        outlist = []
+        for item in obj:
+            outlist.append(ros_to_text_dict(item))
+        return outlist        
+    else:
+        return obj          
+
+# for ROS2
+def ros_from_text_dict(data, obj):
+    try:
+        if isinstance(obj, ROSTime):            
+            if 'nsecs' in  data.keys(): # if data has nsecs it must be ROS1
+                sec = data.get('secs')
+                nanosec = data.get('nsecs')
+            else:
+                sec = data.get('sec')
+                nanosec = data.get('nanosec')
+            return ROSTime(sec = sec, nanosec= nanosec)
+        elif hasattr(obj,'get_fields_and_field_types'):        
+            members: dict = obj._fields_and_field_types        
+            for name, ntype in members.items():
+                field_item = getattr(obj,name)
+                if isinstance(field_item, list): # can be ros message list                    
+                    item_cls = TypeLoader(get_ros_list_type(ntype))
+                    setattr(obj, name, ros_from_text_list(data[name], item_cls))                    
+                else:                   
+                    setattr(obj, name, ros_from_text_dict(data[name], field_item))
+            return obj
+        elif isinstance(obj, array.array):
+            obj.frombytes(pybase64.b64decode(data))
+            return obj
+        elif isinstance(obj, float):
+            return float(data)
+        elif isinstance(obj, numpy.ndarray):
+            return numpy.array(data)            
+        elif isinstance(obj, bytes):
+            return pybase64.b64decode(data)
+        else:
+            obj = data
+            return obj
+    except Exception:        
+        mlogger.debug('indata is %s', data)
+        raise        
+
+def get_ros_list_type(typestr):
+    return typestr.split("<")[1].split('>')[0]
+
+def get_ros_type_name(obj):
+    if hasattr(obj,'get_fields_and_field_types'): 
+        tn = obj.__class__.__module__.split('.')
+        tn.pop()
+        tn.append(obj.__class__.__name__)
+        return '/'.join(tn)
+    else:
+        return obj.__class__.__name__
+
+def ros_from_text_list(data, cls):
+    out = []
+    for item in data:
+        out.append(ros_from_text_dict(item, cls()))
+    return out  
+
+def ros_from_bin_list(data, cls):
+    out = []
+    for item in data:
+        out.append(ros_from_bin_dict(item, cls()))
+    return out    
+
+def ros_from_bin_dict(data, obj):    
+    try:
+        if isinstance(obj, ROSTime):            
+            if 'nsecs' in  data.keys(): # if data has nsecs it must be ROS1
+                sec = data.get('secs')
+                nanosec = data.get('nsecs')
+            else:
+                sec = data.get('sec')
+                nanosec = data.get('nanosec')
+            return ROSTime(sec = sec, nanosec= nanosec)
+        elif hasattr(obj,'get_fields_and_field_types'):        
+            members: dict = obj._fields_and_field_types        
+            for name, ntype in members.items():
+                field_item = getattr(obj,name)
+                if isinstance(field_item, list): # can be ros message list                    
+                    item_cls = TypeLoader(get_ros_list_type(ntype))
+                    setattr(obj, name, ros_from_bin_list(data[name], item_cls))                    
+                else:                   
+                    setattr(obj, name, ros_from_bin_dict(data[name], field_item))
+            return obj
+        elif isinstance(obj, float):
+            return float(data)
+        elif isinstance(obj, array.array):
+            obj.frombytes(data)
+            return obj
+        elif isinstance(obj, numpy.ndarray):
+            return numpy.frombuffer(data)
+        else:
+            obj = data
+            return obj
+    except Exception: 
+        raise      
+
+def ros_to_bin_dict(obj):
+    if hasattr(obj,'get_fields_and_field_types'):
+        members: dict = obj._fields_and_field_types
+        results = {}
+        for name in members.keys():
+            results[name] = ros_to_bin_dict(getattr(obj, name))
+        return results
+    elif isinstance(obj, array.array):
+        return obj.tobytes()
+    elif isinstance(obj, numpy.ndarray):
+        return obj.tobytes()
+    elif isinstance(obj, list):
+        outlist = []
+        for item in obj:
+            outlist.append(ros_to_bin_dict(item))
+        return outlist        
+    else:
+        return obj
+
+def ros_serialize(obj) -> bytes:
+    return serialize_message(obj)
+
+def ros_deserialize(data : bytes, cls_type):
+    return deserialize_message(data, cls_type)
+
+def ros_to_compress(obj):
+    return Compressor.compress(cbor.dumps(ros_to_bin_dict(obj)))
+
+def ros_from_compress(data, obj):
+    return ros_from_bin_dict(cbor.loads(Compressor.decompress(data)),obj)
 
 class TypeModuleError(Exception):
     def __init__(self, errorstr):
@@ -173,14 +245,14 @@ class TypeModuleError(Exception):
 def TypeLoader(clsname):
     try:
         (mname, cname) = clsname.rsplit('/',1)
-        mname = mname.replace('/','.')        
+        mname = mname.replace('/','.')
         if mname.find('.msg')== -1:
             mname = ''.join([mname, '.msg'])
         mod = importlib.import_module(mname)
         clmod = getattr(mod, cname)
         return clmod
     except ValueError:
-        (mname, cname) = clsname.rsplit('.',1)            
+        (mname, cname) = clsname.rsplit('.',1)
         if mname.find('.msg')== -1:
             mname = ''.join([mname, '.msg'])
         mod = importlib.import_module(mname)

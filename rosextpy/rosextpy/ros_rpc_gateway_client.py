@@ -35,7 +35,7 @@ import io
 
 ## must import configuration module before any other sub modules
 from rosextpy.node_manager import NodeManager
-from rosextpy.ext_type_support import TypeLoader, set_json_value, get_json_value, get_ros_value, set_ros_value, is_ros_obj, ros_to_json
+from rosextpy.ext_type_support import TypeLoader, set_json_value, get_json_value, get_ros_value, set_ros_value, is_ros_obj
 
 mlogger = logging.getLogger('ros_rpc_gateway_client')
 

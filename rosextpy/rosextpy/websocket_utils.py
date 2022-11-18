@@ -101,13 +101,22 @@ elif WS_CONFIG['wsf'] == "fastapi":
             mlogger.debug("websocket is %s ", type(websocket))
             mlogger.debug("Mod config is %s", WS_CONFIG['wsf'])
 
-        @property
-        def send(self):
-            return self.websocket.send_text
+        #@property
+        #def send(self):
+        async def send(self, mesg):
+            if isinstance(mesg, bytes):
+                await self.websocket.send_bytes(mesg)
+            else:
+                await self.websocket.send_text(mesg)
 
-        @property
-        def recv(self):
-            return self.websocket.receive_text
+        #@property
+        async def recv(self):
+            mesg = await self.websocket.receive()
+            if 'text' in mesg.keys():
+                return mesg['text']
+            elif 'bytes' in mesg.keys():
+                return mesg['bytes']
+            return None
 
         async def close(self, code: int = 1000):
             return await self.websocket.close(code)
