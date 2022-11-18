@@ -228,5 +228,5 @@ An example JSON config example is as follows : myconfig.json
 
 Run command as follows :
 ```
-ros2 launch rosextpy gateway_launch.xml --file ${PWD}/myconfig.json
+ros2 launch rosextpy gateway_launch.xml file:=${PWD}/myconfig.json
 ```
