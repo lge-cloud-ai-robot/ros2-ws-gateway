@@ -78,7 +78,7 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--port", type=int,
-                        help="Listen port, default to :9090", default=9000)
+                        help="Listen port, default to :9000", default=9000)
     parser.add_argument("-f", "--file", help="config file name")
     options = parser.parse_args()
 

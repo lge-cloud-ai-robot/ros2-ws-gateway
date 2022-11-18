@@ -205,3 +205,28 @@ An example JSON request is as follows :
 * response_rule.mapping[].from - the member of the source field of the REST response 
 * response_rule.mapping[].out - the target topics to be published
 * response_rule.mapping[].to - a member of the target topics to be published
+
+
+### Run gateway with config
+
+An example JSON config example is as follows : myconfig.json
+```
+[
+    {
+        "title":"jackal1",
+        "active": true,
+        "address": "ws://192.168.0.15:9000",
+        "publish": [
+            {"name":"/kitti/camera_color_left/image_raw", "messageType":"sensor_msgs/msg/Image", "compression" : "zip"}
+        ],
+        "subscribe": [
+            {"name":"/cmd_vel", "messageType":"geometry_msgs/msg/Twist"}
+        ]
+    }
+]
+```
+
+Run command as follows :
+```
+ros2 launch rosextpy gateway_launch.xml --file ${PWD}/myconfig.json
+```
