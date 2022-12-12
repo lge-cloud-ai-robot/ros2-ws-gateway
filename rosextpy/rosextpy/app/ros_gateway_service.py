@@ -45,8 +45,9 @@ mlogger = logging.getLogger('ros_agent_main')
 # logging.getLogger('websocket_utils').setLevel(logging.DEBUG)
    
 if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
-    from fastapi import Body, FastAPI, WebSocket, status, BackgroundTasks    
+    from fastapi import Body, FastAPI, WebSocket, status, BackgroundTasks        
     from fastapi.responses import JSONResponse
+    from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel
     from enum import Enum
     import argparse
@@ -74,7 +75,14 @@ if WS_CONFIG['wsf'] == 'fastapi':    # wsf means web service framework
         id: str
 
     app = FastAPI()
-    agent :RosWsGatewayAgent= None    
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],        
+    )
+    agent :RosWsGatewayAgent= None
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--port", type=int,
