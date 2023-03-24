@@ -38,6 +38,8 @@ from rosextpy.node_manager import NodeManager
 from rosextpy.ext_type_support import TypeLoader, set_json_value, get_json_value, get_ros_value, set_ros_value, is_ros_obj
 
 mlogger = logging.getLogger('ros_rpc_gateway_client')
+mlogger.setLevel(logging.DEBUG)
+
 
 class RosRPCGatewayClient():
     def __init__(self,nodeMgr, rpcMgr, service_uri, service_method, request_rule, response_rule):
@@ -76,10 +78,11 @@ class RosRPCGatewayClient():
         self.response_rule = response_rule
         self._init()
 
-    def _ros_subscription_callback(self, topic_name, compression,  mesg):
+    def _ros_subscription_callback(self, topic_name, mesg, compression):
         mlogger.debug("_ros_subscription_callback  %s", topic_name) 
         outctx = None            
-
+        response = None
+        
         if self.request_rule['content-type'] == 'application/json':
             data=  self.make_json_request(topic_name, mesg)
             if data:
@@ -99,9 +102,9 @@ class RosRPCGatewayClient():
         if outctx:            
             for k, m in outctx.items():
                 mlogger.debug(" Topic [%s] ", k)                
-                self.publishers[k].raw_publish(m)
+                self.publishers[k].publish(m)
 
-    def make_file_request(self, topic_name, mesg):
+    def make_file_request(self, topic_name, mesg):        
         topicType = self.request_rule['topics'].get(topic_name)
 
         if topicType == 'sensor_msgs/msg/CompressedImage':
@@ -196,7 +199,7 @@ class RosRPCGatewayClient():
                 resp_json = resp.json()
                 req_ctx['body'] = resp_json # req_ctx us resued for response context
                 # make empty ROS message object for each topics in response_rule
-                outctx = dict(map(lambda x: (x, self.publishers[x].get_empty_obj()), self.response_rule['topics']))
+                outctx = dict(map(lambda x: (x, self.publishers[x].get_class_obj()), self.response_rule['topics']))
                 #fill ROS message object from request context
                 outctx = self._map_resp_to_mesg(outctx, self.response_rule['mapping'], req_ctx)
             else:
@@ -207,12 +210,12 @@ class RosRPCGatewayClient():
             outtopic = list(self.response_rule['topics'].keys())[0]
             outtype = list(self.response_rule['topics'].values())[0]
             if outtype == 'sensor_msgs/msg/CompressedImage':
-                outmsg =self.publishers[outtopic].get_empty_obj()
+                outmsg =self.publishers[outtopic].get_class_obj()
                 outmsg.format=content_type[1]
                 outmsg.data = resp.content
                 outctx = {outtopic: outmsg}
             elif outtype == 'sensor_msgs/msg/Image':                
-                outmsg =self.publishers[outtopic].get_empty_obj()                
+                outmsg =self.publishers[outtopic].get_class_obj()                
                 im = PILImage.open(io.BytesIO(resp.content))
                 im = im.convert('RGB')
                 outmsg.header.stamp = self.node_manager.get_now().to_msg()
