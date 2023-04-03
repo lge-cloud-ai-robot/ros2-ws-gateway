@@ -332,7 +332,7 @@ class RosWsGateway():
                 elif compression=='cbor':
                     pub.publish(ros_from_bin_dict(cmd_data['msg'], pub.get_class_obj()))
                 elif compression=='cbor-raw':
-                    pub.publish(ros_deserialize(cmd_data['msg'], pub.get_class_type()))
+                    pub.publish(ros_deserialize(cmd_data['msg']['bytes'], pub.get_class_type()))
                 elif compression=='zip':
                     pub.publish(ros_from_compress(cmd_data['msg'], pub.get_class_obj()))
                 else:
@@ -707,7 +707,7 @@ class RosWsGateway():
                 mesg_items[data_tag] = bytesToJSBuffer(ros_to_bin_dict(data_mesg)) # it will be text                
             elif compression=='cbor':
                 mesg_items[data_tag] = ros_to_bin_dict(data_mesg)                
-            elif compression=='cbor-raw':
+            elif compression=='cbor-raw':                
                 (secs, nsecs) = self.node_manager.get_node().get_clock().now().seconds_nanoseconds()
                 if isinstance(data_mesg, bytes):
                     mesg_items[data_tag] = {"secs": secs,"nsecs": nsecs,"bytes": data_mesg}
@@ -764,7 +764,7 @@ class RosWsGateway():
                             'topic': item_tuple[1], 'type': item_tuple[2]}
 
                     if item_tuple[4]: ## 221102
-                        data['compression'] = item_tuple[4] ## 221102
+                        data['compression'] = compression # item_tuple[4] ## 221102
 
                     await self.send(data)
 
